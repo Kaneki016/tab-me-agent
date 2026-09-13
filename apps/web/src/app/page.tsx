@@ -60,6 +60,9 @@ export default function Home() {
         <a className="btn" href="#setup">
           Load the extension
         </a>
+        <a className="btn" href="/reviews">
+          Recent reviews
+        </a>
       </div>
       {error ? (
         <p className="alert" role="alert">

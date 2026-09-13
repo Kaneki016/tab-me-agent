@@ -11,6 +11,7 @@ export function ReviewControl({ session }: { session: ReviewSession }) {
     value: {
       reviewId: session.reviewId,
       status: session.status,
+      source: session.source ?? "heuristic",
       tabs: session.tabs.map((tab) => ({
         title: tab.title,
         url: tab.url,
@@ -19,9 +20,11 @@ export function ReviewControl({ session }: { session: ReviewSession }) {
       suggestions: session.suggestions.map((suggestion) => ({
         id: suggestion.id,
         type: suggestion.type,
+        category: suggestion.category ?? "follow_up",
         title: suggestion.title,
         description: suggestion.description ?? "",
         status: suggestion.status,
+        mode: suggestion.mode ?? null,
       })),
     },
   });
@@ -38,6 +41,37 @@ export function ReviewControl({ session }: { session: ReviewSession }) {
       }),
     },
     [session],
+  );
+
+  useFrontendTool(
+    {
+      name: "search_web",
+      description:
+        "Search the public web for grounded answers. Read-only; does not write anywhere.",
+      parameters: z.object({
+        query: z.string().describe("Natural-language search query."),
+        results: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("How many results to return."),
+      }),
+      handler: async ({ query, results }) => {
+        const response = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, results }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          return data.error || "Web search is not available.";
+        }
+        return data.results;
+      },
+    },
+    [],
   );
 
   return null;

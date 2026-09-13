@@ -1,4 +1,5 @@
-import type { Suggestion, Tab } from "./types";
+import { triageTabs, type TriageSuggestion } from "agent-core";
+import type { Suggestion, SuggestionSource, Tab, TaskCategory } from "./types";
 
 let counter = 0;
 
@@ -19,83 +20,117 @@ function usableTabs(tabs: Tab[]): Tab[] {
   return tabs.filter((tab) => tab.status !== "unsupported");
 }
 
+function categoryFor(tab: Tab): TaskCategory {
+  const text = `${tab.title} ${tab.url}`.toLowerCase();
+  if (/react|next|learn|doc|guide|tutorial|mdn|spec/.test(text)) return "learning";
+  if (/notion|linear|asana|competitor|product|pricing/.test(text)) return "competitor";
+  if (/paper|report|study|research|arxiv/.test(text)) return "research";
+  if (/reference|api|manual|docs/.test(text)) return "reference";
+  return "follow_up";
+}
+
+function actionFor(category: TaskCategory, tab: Tab): string {
+  const subject = tab.title || new URL(tab.url).hostname;
+  switch (category) {
+    case "learning":
+      return `Study: ${subject}`;
+    case "competitor":
+      return `Assess competitor: ${subject}`;
+    case "research":
+      return `Research: ${subject}`;
+    case "reference":
+      return `Review reference: ${subject}`;
+    default:
+      return `Follow up: ${subject}`;
+  }
+}
+
+function taskSuggestion(
+  title: string,
+  description: string,
+  category: TaskCategory,
+  urls: string[],
+  confidence: number,
+): Suggestion {
+  return {
+    id: nextId(),
+    type: "create_task",
+    category,
+    status: "pending_review",
+    data: { title, urls },
+    editable: true,
+    title,
+    description,
+    dueDate: nextFriday(),
+    confidence,
+  };
+}
+
+function triageData(item: TriageSuggestion): Record<string, unknown> {
+  return {
+    title: item.title,
+    urls: item.sourceUrl ? [item.sourceUrl] : [],
+  };
+}
+
+export function mapTriageSuggestions(items: TriageSuggestion[]): Suggestion[] {
+  return items.map((item) => ({
+    id: nextId(),
+    type: "create_task",
+    category: item.category,
+    status: "pending_review",
+    data: triageData(item),
+    editable: true,
+    title: item.title,
+    description: item.description,
+    dueDate: item.dueDate || nextFriday(),
+    confidence: item.confidence,
+  }));
+}
+
+/** Deterministic, useful fallback when the model is absent or times out. */
 export function generateSuggestions(tabs: Tab[]): Suggestion[] {
-  const suggestions: Suggestion[] = [];
   const pool = usableTabs(tabs);
-
-  const learningTabs = pool
-    .filter(
-      (tab) =>
-        /react|next|learn|doc|guide|tutorial|mdn|spec/i.test(tab.title) ||
-        /react|next|learn|doc|guide|tutorial/i.test(tab.url),
-    )
-    .slice(0, 2);
-
-  for (const tab of learningTabs) {
-    suggestions.push({
-      id: nextId(),
-      type: "create_task",
-      status: "pending_review",
-      data: { title: `Learn: ${tab.title || "Untitled"}`, url: tab.url },
-      editable: true,
-      title: `Create task: ${tab.title || "topic"}`,
-      description: `From tab: ${tab.title || tab.url}`,
-      dueDate: nextFriday(),
-      confidence: 0.7,
-    });
-  }
-
-  const competitorTabs = pool
-    .filter(
-      (tab) =>
-        /notion|linear|asana|competitor|product|pricing/i.test(tab.title) ||
-        /notion|linear|asana|competitor/i.test(tab.url),
-    )
-    .slice(0, 1);
-
-  for (const tab of competitorTabs) {
-    suggestions.push({
-      id: nextId(),
-      type: "add_competitor",
-      status: "pending_review",
-      data: { name: tab.title || "Competitor", url: tab.url },
-      editable: true,
-      title: `Add competitor: ${tab.title || "Unknown"}`,
-      description: `From tab: ${tab.url}`,
-      confidence: 0.6,
-    });
-  }
-
-  if (suggestions.length === 0 && pool.length > 0) {
-    const first = pool[0];
-    suggestions.push({
-      id: nextId(),
-      type: "save_note",
-      status: "pending_review",
-      data: { title: first.title || "Untitled note", url: first.url },
-      editable: true,
-      title: `Save note: ${first.title || "Untitled"}`,
-      description: `From tab: ${first.url}`,
-      confidence: 0.5,
-    });
-  }
+  const suggestions = pool.slice(0, 4).map((tab) => {
+    const category = categoryFor(tab);
+    const title = actionFor(category, tab);
+    return taskSuggestion(
+      title,
+      `Turn the captured tab into a concrete ${category.replace("_", " ")} follow-up.`,
+      category,
+      [tab.url],
+      0.62,
+    );
+  });
 
   if (pool.length >= 3 && suggestions.length < 5) {
-    suggestions.push({
-      id: nextId(),
-      type: "create_task",
-      status: "pending_review",
-      data: {
-        title: `Triage ${pool.length} open tabs`,
-        urls: pool.map((tab) => tab.url),
-      },
-      editable: true,
-      title: `Create task: Triage ${pool.length} captured tabs`,
-      description: "Bundle the current window into one follow-up.",
-      dueDate: nextFriday(),
-      confidence: 0.55,
-    });
+    suggestions.push(
+      taskSuggestion(
+        `Prioritize ${pool.length} captured tabs`,
+        "Review the captured sources together and decide the next three actions.",
+        "follow_up",
+        pool.map((tab) => tab.url),
+        0.55,
+      ),
+    );
   }
 
   return suggestions.slice(0, 5);
+}
+
+export async function buildReviewSuggestions(tabs: Tab[]): Promise<{
+  suggestions: Suggestion[];
+  source: SuggestionSource;
+}> {
+  const triage = await triageTabs(tabs);
+  if (triage) {
+    return {
+      suggestions: mapTriageSuggestions(triage.suggestions),
+      source: "model",
+    };
+  }
+  return {
+    suggestions: generateSuggestions(tabs),
+    source: "heuristic",
+  };
 }

@@ -1,62 +1,103 @@
 import { isWorkplaceConfigured } from "agent-core";
 import { FollowupError } from "./server/followup-error";
-import { configuredWorkplace } from "./server/workplace";
+import { configuredWorkplace, type Workplace } from "./server/workplace";
 import type { ExecutionResult, Suggestion } from "./types";
 
-function mockResult(suggestion: Suggestion): ExecutionResult {
-  const actionId = `mock_${suggestion.type}_${Date.now()}`;
-  return { id: suggestion.id, status: "completed", actionId, resultUrl: null };
+export type WorkplaceConnection = {
+  workplace: Workplace;
+  close(): Promise<void>;
+};
+
+function sourceUrls(suggestion: Suggestion): string[] {
+  const urls = suggestion.data.urls;
+  if (Array.isArray(urls)) {
+    return urls.filter((url): url is string => typeof url === "string");
+  }
+  const url = suggestion.data.url;
+  return typeof url === "string" ? [url] : [];
+}
+
+/**
+ * A marker makes an approval safely retryable across page reloads and process
+ * restarts. The in-process execution lock handles the small race before this
+ * lookup; the provider lookup handles a retry after a successful write.
+ */
+async function existingTask(
+  connection: WorkplaceConnection,
+  marker: string,
+) {
+  const tasks = await connection.workplace.list(marker);
+  return tasks.find((task) => task.description.includes(marker));
 }
 
 export async function executeAction(
   suggestion: Suggestion,
   reviewId: string,
+  connection?: WorkplaceConnection | null,
 ): Promise<ExecutionResult> {
-  if (suggestion.type !== "create_task") {
-    return mockResult(suggestion);
-  }
-
   if (!isWorkplaceConfigured()) {
-    return mockResult(suggestion);
+    return {
+      id: suggestion.id,
+      status: "failed",
+      error: "Ambiguous is not configured. This approval was not written.",
+    };
   }
 
-  const connection = configuredWorkplace();
+  const active = connection ?? configuredWorkplace();
+  const ownsConnection = !connection;
+  const marker = `suggestion:${suggestion.id}`;
+
   try {
+    const existing = await existingTask(active, marker);
+    if (existing) {
+      return {
+        id: suggestion.id,
+        status: "skipped",
+        actionId: existing.id,
+        resultUrl: existing.url,
+        mode: "real",
+        modeReason: "already written to Ambiguous",
+      };
+    }
+
     const title =
       typeof suggestion.data.title === "string"
         ? suggestion.data.title
         : suggestion.title;
     const description = [
       suggestion.description ?? "",
-      typeof suggestion.data.url === "string"
-        ? `Source: ${suggestion.data.url}`
-        : "",
+      suggestion.category ? `Category: ${suggestion.category.replace("_", " ")}` : "",
+      ...sourceUrls(suggestion).map((url) => `Source: ${url}`),
       `tabme:${reviewId}`,
-      `suggestion:${suggestion.id}`,
+      marker,
     ]
       .filter(Boolean)
       .join("\n");
 
-    const task = await connection.workplace.create(title, description, async () => {
-      // Approval already happened on the review page. This hook only marks the send.
+    const task = await active.workplace.create(title, description, async () => {
+      // This function is reached only from the page's explicit approval route.
     });
     return {
       id: suggestion.id,
       status: "completed",
       actionId: task.id,
       resultUrl: task.url,
+      mode: "real",
+      modeReason: "written to Ambiguous",
     };
   } catch (error) {
     const message =
       error instanceof FollowupError
         ? error.message
-        : "Unable to create the Ambiguous task. Other approvals were not blocked.";
+        : "Unable to create the Ambiguous task. No completion was recorded.";
     return { id: suggestion.id, status: "failed", error: message };
   } finally {
-    try {
-      await connection.close();
-    } catch {
-      console.warn("Ambiguous workplace cleanup failed after Tabme execution.");
+    if (ownsConnection) {
+      try {
+        await active.close();
+      } catch {
+        console.warn("Ambiguous workplace cleanup failed after Tabme execution.");
+      }
     }
   }
 }

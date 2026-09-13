@@ -23,7 +23,7 @@ Turn the current browser window into a short list of proposed actions, then wait
 - Never auto-execute. Chat assent is not approval.
 - Minimal extension permissions. Skip `chrome://` and similar pages.
 - Scrape at most three public pages; keep title and URL if scrape fails.
-- Sessions are in-memory. Do not pretend they survive a server restart.
+- Sessions persist locally for 24 hours (capped). Do not invent a cloud store.
 - Do not invent workplace record links. Only show IDs/URLs returned by Ambiguous.
 
 ## Voice
@@ -32,4 +32,4 @@ Direct, brief, slightly editorial. Name the action. Do not sound like a generic 
 
 ## Evidence
 
-A successful run shows: captured tab count, 3–5 suggestions, an approval click, and a result (real Ambiguous task ID or an honest mock label).
+A successful run shows: captured tab count, 3–5 task suggestions, an approval click, and returned Ambiguous task IDs or links.

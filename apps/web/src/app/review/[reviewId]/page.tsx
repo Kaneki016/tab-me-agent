@@ -1,11 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { CopilotChat, useConfigureSuggestions } from "@copilotkit/react-core/v2";
 import { GenerativeUI } from "@/components/generative-ui";
 import { ReviewControl } from "@/components/review-control";
-import type { ReviewSession, Suggestion } from "@/lib/types";
+import type { ExecutionResult, ReviewSession, Suggestion } from "@/lib/types";
+
+function isSelectable(suggestion: Suggestion): boolean {
+  return suggestion.status === "pending_review" || suggestion.status === "failed";
+}
+
+function summarizeExecution(results: ExecutionResult[]): string {
+  let real = 0;
+  let mock = 0;
+  let failed = 0;
+
+  for (const item of results) {
+    if (item.status === "failed") {
+      failed += 1;
+      continue;
+    }
+    if (item.status === "skipped") continue;
+    if (item.mode === "real") real += 1;
+    else if (item.mode === "mock") mock += 1;
+  }
+
+  const parts: string[] = [];
+  if (real > 0) parts.push(`${real} written to Ambiguous`);
+  if (mock > 0) parts.push(`${mock} simulated locally`);
+  if (failed > 0) parts.push(`${failed} failed`);
+
+  return parts.length > 0 ? parts.join(", ") + "." : "No actions completed.";
+}
 
 export default function ReviewPage() {
   const { reviewId } = useParams<{ reviewId: string }>();
@@ -15,6 +42,16 @@ export default function ReviewPage() {
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const hasFailed = useMemo(
+    () => session?.suggestions.some((item) => item.status === "failed") ?? false,
+    [session],
+  );
+
+  const hasRetryable = useMemo(
+    () => session?.suggestions.some(isSelectable) ?? false,
+    [session],
+  );
 
   useConfigureSuggestions(
     {
@@ -47,11 +84,12 @@ export default function ReviewPage() {
           suggestions: data.suggestions,
           createdAt: data.createdAt,
           status: data.status,
+          source: data.source,
         });
         setSelected(
           new Set(
             data.suggestions
-              .filter((item: Suggestion) => item.status === "pending_review")
+              .filter((item: Suggestion) => isSelectable(item))
               .map((item: Suggestion) => item.id),
           ),
         );
@@ -79,17 +117,7 @@ export default function ReviewPage() {
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Execution failed");
-      const completed = (data.results ?? []).filter(
-        (item: { status: string }) => item.status === "completed",
-      ).length;
-      const failed = (data.results ?? []).filter(
-        (item: { status: string }) => item.status === "failed",
-      ).length;
-      setResult(
-        failed
-          ? `Completed ${completed} actions. ${failed} failed.`
-          : `Completed ${completed} actions.`,
-      );
+      setResult(summarizeExecution(data.results ?? []));
       const refresh = await fetch(`/api/suggestions/${reviewId}`);
       const next = await refresh.json();
       if (next.success) {
@@ -99,7 +127,15 @@ export default function ReviewPage() {
           suggestions: next.suggestions,
           createdAt: next.createdAt,
           status: next.status,
+          source: next.source,
         });
+        setSelected(
+          new Set(
+            next.suggestions
+              .filter((item: Suggestion) => isSelectable(item))
+              .map((item: Suggestion) => item.id),
+          ),
+        );
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to execute suggestions");
@@ -120,13 +156,23 @@ export default function ReviewPage() {
     return (
       <main className="shell">
         <h1>Review not found</h1>
-        <p className="alert">{error ?? "This reviewId is not in memory. Capture tabs again."}</p>
-        <a className="btn" href="/">
-          Back to Tabme
-        </a>
+        <p className="alert">
+          {error ?? "This reviewId is not available. Capture tabs again or check recent reviews."}
+        </p>
+        <div className="cluster">
+          <a className="btn" href="/">
+            Back to Tabme
+          </a>
+          <a className="btn" href="/reviews">
+            Recent reviews
+          </a>
+        </div>
       </main>
     );
   }
+
+  const canExecute =
+    selected.size > 0 && (hasRetryable || session.status !== "executed");
 
   return (
     <main className="shell stack">
@@ -148,6 +194,14 @@ export default function ReviewPage() {
             {session.tabs.length} tabs captured. Approve only the suggestions you
             want Tabme to run.
           </p>
+          {session.source ? (
+            <p className="meta">
+              Suggestions from{" "}
+              <span className="source-pill" data-source={session.source}>
+                {session.source === "model" ? "model triage" : "heuristic fallback"}
+              </span>
+            </p>
+          ) : null}
 
           <div className="tab-rail" aria-label="Captured tabs">
             {session.tabs.map((tab) => (
@@ -171,7 +225,7 @@ export default function ReviewPage() {
                 <input
                   type="checkbox"
                   checked={selected.has(suggestion.id)}
-                  disabled={session.status === "executed"}
+                  disabled={!isSelectable(suggestion)}
                   onChange={(event) => {
                     const next = new Set(selected);
                     if (event.target.checked) next.add(suggestion.id);
@@ -185,12 +239,22 @@ export default function ReviewPage() {
                     <span className="meta">{suggestion.description}</span>
                   ) : null}
                   <span className="meta">
-                    {suggestion.type.replaceAll("_", " ")}
+                    {(suggestion.category ?? "follow_up").replaceAll("_", " ")}
                     {suggestion.status !== "pending_review"
                       ? ` · ${suggestion.status}`
                       : ""}
                     {suggestion.actionId ? ` · ${suggestion.actionId}` : ""}
                   </span>
+                  <span className="category-chip">Task</span>
+                  {suggestion.mode ? (
+                    <span
+                      className="mode-chip"
+                      data-mode={suggestion.mode}
+                      title={suggestion.modeReason}
+                    >
+                      {suggestion.mode === "real" ? "Task created" : "Legacy simulated"}
+                    </span>
+                  ) : null}
                   {suggestion.resultUrl ? (
                     <a href={suggestion.resultUrl} target="_blank" rel="noreferrer">
                       Open workplace record
@@ -209,14 +273,17 @@ export default function ReviewPage() {
               type="button"
               className="btn btn-primary"
               onClick={handleApprove}
-              disabled={
-                executing || selected.size === 0 || session.status === "executed"
-              }
+              disabled={executing || !canExecute}
             >
               {executing
                 ? "Executing…"
-                : `Approve selected (${selected.size})`}
+                : hasFailed
+                  ? `Retry selected (${selected.size})`
+                  : `Approve selected (${selected.size})`}
             </button>
+            <a className="btn" href="/reviews">
+              Recent reviews
+            </a>
           </div>
           {error ? (
             <p className="alert" role="alert">

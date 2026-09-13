@@ -1,65 +1,62 @@
-import { executeAction } from "@/lib/actions";
-import { getSession, updateSession } from "@/lib/sessions";
+import { isWorkplaceConfigured } from "agent-core";
+import { configuredWorkplace } from "@/lib/server/workplace";
+import { executeApprovedSuggestions } from "@/lib/execute";
 import { jsonWithCors, optionsWithCors } from "@/lib/cors";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function OPTIONS() {
-  return optionsWithCors();
+const executeBodySchema = z.object({
+  reviewId: z.string().regex(/^rev_[0-9a-f-]{36}$/),
+  approvedIds: z.array(z.string().min(1)).min(1).max(5),
+});
+
+export function OPTIONS(request: Request) {
+  return optionsWithCors(request);
 }
 
 export async function POST(request: Request) {
+  let connection: ReturnType<typeof configuredWorkplace> | null = null;
+
   try {
-    const body = (await request.json()) as {
-      reviewId?: string;
-      approvedIds?: string[];
-    };
-    const reviewId = body.reviewId;
-    const approvedIds = Array.isArray(body.approvedIds) ? body.approvedIds : [];
+    const { reviewId, approvedIds } = executeBodySchema.parse(await request.json());
 
-    if (!reviewId) {
-      return jsonWithCors({ success: false, error: "Missing reviewId" }, 400);
+    if (isWorkplaceConfigured()) {
+      connection = configuredWorkplace();
     }
 
-    const session = getSession(reviewId);
-    if (!session) {
-      return jsonWithCors({ success: false, error: "Session not found" }, 404);
-    }
-
-    const approved = session.suggestions.filter((suggestion) =>
-      approvedIds.includes(suggestion.id),
-    );
-    const rejected = session.suggestions.filter(
-      (suggestion) => !approvedIds.includes(suggestion.id),
+    const { results } = await executeApprovedSuggestions(
+      reviewId,
+      approvedIds,
+      connection,
     );
 
-    for (const suggestion of rejected) {
-      if (suggestion.status === "pending_review") {
-        suggestion.status = "rejected";
-      }
+    return jsonWithCors({ success: true, results }, 200, request);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to execute suggestions.";
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return jsonWithCors({ success: false, error: "Invalid approval request" }, 400, request);
     }
-
-    const results = [];
-    for (const suggestion of approved) {
-      suggestion.status = "approved";
-      const result = await executeAction(suggestion, reviewId);
-      results.push(result);
-      suggestion.status = result.status;
-      suggestion.actionId = result.actionId;
-      suggestion.resultUrl = result.resultUrl;
-      suggestion.error = result.error;
+    if (message === "Session not found") {
+      return jsonWithCors({ success: false, error: message }, 404, request);
     }
-
-    updateSession(reviewId, (current) => {
-      current.status = "executed";
-    });
-
-    return jsonWithCors({ success: true, results });
-  } catch {
+    if (message === "Unknown suggestion selected") {
+      return jsonWithCors({ success: false, error: message }, 400, request);
+    }
+    console.error("execute-suggestions failed:", error);
     return jsonWithCors(
       { success: false, error: "Unable to execute suggestions." },
       500,
+      request,
     );
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch {
+        console.warn("Ambiguous workplace cleanup failed after Tabme execution.");
+      }
+    }
   }
 }

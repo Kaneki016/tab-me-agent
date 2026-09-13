@@ -6,16 +6,16 @@
   "description": "The one Tabme agent every surface points at. Model, prompt, and surface-agnostic capabilities.",
   "exports": {
     ".": "./src/index.ts",
-    "./shared": "./src/shared.ts",
-    "./mobile-finance-prompt": "./src/mobile-finance-prompt.ts"
+    "./shared": "./src/shared.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/model.test.ts"
+    "test": "node --import tsx --test src/model.test.ts src/prompt.test.ts src/capabilities/triage.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.36",
     "@copilotkit/runtime": "1.70.3",
+    "ai": "^6.0.104",
     "exa-js": "^2.19.0",
     "zod": "^4.1.0"
   }

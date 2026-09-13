@@ -49,8 +49,19 @@ How to work a review:
   and inference.
 `.trim();
 
-/** What `makeAgent` actually sends. */
-export const SYSTEM_PROMPT = `${SURFACE_RULES}\n\n---\n\n${TABME_ROLE}`;
+const TABME_ROLE_WITHOUT_SEARCH = TABME_ROLE.replace(
+  /- \*\*Ground claims\.\*\* If asked about a public page you do not have content for,\s*use search_web when configured\. Otherwise say you only have the title and URL\./,
+  "- **Ground claims.** If asked about a public page you do not have content for, say you only have the title and URL.",
+);
+
+/** What `makeAgent` sends when search is not configured. */
+export const SYSTEM_PROMPT = `${SURFACE_RULES}\n\n---\n\n${TABME_ROLE_WITHOUT_SEARCH}`;
+
+/** Build the system prompt per request so search_web is only promised when Exa is wired. */
+export function buildSystemPrompt(options?: { searchConfigured?: boolean }): string {
+  const role = options?.searchConfigured ? TABME_ROLE : TABME_ROLE_WITHOUT_SEARCH;
+  return `${SURFACE_RULES}\n\n---\n\n${role}`;
+}
 
 /** @deprecated Alias kept so starter-kit notes still resolve. Use TABME_ROLE. */
 export const ONCALL_ROLE = TABME_ROLE;

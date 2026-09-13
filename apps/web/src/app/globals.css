@@ -238,6 +238,85 @@ code {
   padding: 0.2rem 0.5rem;
 }
 
+.source-pill {
+  display: inline-block;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  background: #fffaf1;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+
+.source-pill[data-source="model"] {
+  color: var(--moss);
+  background: var(--moss-soft);
+  border-color: transparent;
+}
+
+.mode-chip {
+  display: inline-block;
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+
+.category-chip {
+  display: inline-block;
+  margin-top: 0.35rem;
+  margin-right: 0.35rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.4rem;
+  color: var(--moss);
+  background: var(--moss-soft);
+}
+
+.mode-chip[data-mode="real"] {
+  color: var(--ok);
+  border-color: #b8d4be;
+  background: #eef6ef;
+}
+
+.mode-chip[data-mode="mock"] {
+  color: var(--ink-soft);
+  background: #fffaf1;
+}
+
+.review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.review-list li {
+  border-top: 1px solid var(--line);
+}
+
+.review-link {
+  display: block;
+  padding: 14px 0;
+  text-decoration: none;
+  color: inherit;
+}
+
+.review-link strong {
+  display: block;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.review-link:hover strong {
+  color: var(--brass-deep);
+}
+
 @media (max-width: 860px) {
   .grid {
     grid-template-columns: 1fr;

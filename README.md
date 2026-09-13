@@ -18,7 +18,9 @@ npm run dev:web
 
 Open `http://127.0.0.1:3100` and click **Review sample tabs**, or load `apps/extension` unpacked in Chrome and capture a real window.
 
-Set `OPENAI_API_KEY` (or OpenRouter) before using the in-page assistant. Set `AMBIGUOUS_API_KEY` only if you want approved `create_task` items to create a real workplace record.
+Set `OPENAI_API_KEY` (or OpenRouter) before using the in-page assistant or model-generated suggestions. Set `AMBIGUOUS_API_KEY` to approve suggestions as real workplace tasks. Optional: `EXA_API_KEY` enables grounded web search in chat.
+
+Preflight the backend with `curl http://127.0.0.1:3100/api/health`. Lost a review link? Open `/reviews` or `GET /api/reviews`.
 
 ## Repo map
 
@@ -36,7 +38,7 @@ Set `OPENAI_API_KEY` (or OpenRouter) before using the in-page assistant. Set `AM
 
 Starter-kit code we kept: workspace layout, `makeAgent`, CopilotKit Hono runtime, model resolver, Ambiguous MCP adapter, HITL “ask before writes,” and the sponsor/hackathon docs.
 
-Tabme-specific: tab capture, review sessions, suggestion heuristics, Approve selected, extension, branding, and Impeccable skill.
+Tabme-specific: tab capture, durable review sessions, task-first triage with heuristic fallback, real Ambiguous execution after approval, extension, branding, and Impeccable skill.
 
 The git folder may still be named `tab-me-agent`. That is a remote/path identifier, not the product name.
 

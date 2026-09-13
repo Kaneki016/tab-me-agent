@@ -18,9 +18,14 @@ npm run dev:web
 
 Open `http://127.0.0.1:3100`. The approval server binds to loopback.
 
-Set `OPENAI_API_KEY` (or OpenRouter) before using the in-page assistant.
-Set `AMBIGUOUS_API_KEY` if you want approved `create_task` suggestions to
-create a real workplace record. Without it, execution is mocked and labeled.
+Set `OPENAI_API_KEY` (or OpenRouter) before using the in-page assistant or
+model-generated suggestions. Heuristics run if the model is missing or times out.
+Set `AMBIGUOUS_API_KEY` to approve suggestions. Every approved suggestion
+creates a real Ambiguous task; without it, approval fails without a write.
+Optional: `EXA_API_KEY` enables `search_web` in chat via `POST /api/search`.
+
+Sessions persist under `.tabme-sessions/` (24h, cap 50). Lost a link? Open
+`/reviews` or `GET /api/health` for a preflight.
 
 ## Try the flow
 

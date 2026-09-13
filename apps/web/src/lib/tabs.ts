@@ -2,10 +2,21 @@ import { z } from "zod";
 import type { Tab } from "./types";
 
 const tabSchema = z.object({
-  id: z.number(),
-  url: z.string(),
-  title: z.string().default(""),
-  content: z.string().optional(),
+  id: z.number().int().positive(),
+  url: z
+    .string()
+    .min(1)
+    .max(2_048)
+    .refine((value) => {
+      try {
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "Invalid tab URL"),
+  title: z.string().max(500).default(""),
+  content: z.string().max(5_000).optional(),
   status: z.enum(["captured", "scraped", "unsupported"]).default("captured"),
 });
 
@@ -13,11 +24,7 @@ export function parseTabs(input: unknown): Tab[] {
   if (!Array.isArray(input)) {
     throw new Error("No tabs provided");
   }
-  const tabs = z.array(tabSchema).min(1).parse(input);
-  return tabs.map((tab) => ({
-    ...tab,
-    content: tab.content?.slice(0, 5000),
-  }));
+  return z.array(tabSchema).min(1).max(20).parse(input);
 }
 
 export const SAMPLE_TABS: Tab[] = [

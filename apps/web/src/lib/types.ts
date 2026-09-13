@@ -16,6 +16,17 @@ export type SuggestionStatus =
   | "completed"
   | "failed";
 
+export type TaskCategory =
+  | "learning"
+  | "research"
+  | "competitor"
+  | "reference"
+  | "follow_up";
+
+export type ExecutionMode = "real" | "mock";
+
+export type SuggestionSource = "model" | "heuristic";
+
 export interface Tab {
   id: number;
   url: string;
@@ -27,6 +38,7 @@ export interface Tab {
 export interface Suggestion {
   id: string;
   type: SuggestionType;
+  category: TaskCategory;
   status: SuggestionStatus;
   data: Record<string, unknown>;
   editable: boolean;
@@ -37,6 +49,8 @@ export interface Suggestion {
   error?: string;
   actionId?: string;
   resultUrl?: string | null;
+  mode?: ExecutionMode;
+  modeReason?: string;
 }
 
 export interface ReviewSession {
@@ -45,12 +59,15 @@ export interface ReviewSession {
   suggestions: Suggestion[];
   createdAt: string;
   status: "pending" | "reviewed" | "executed";
+  source?: SuggestionSource;
 }
 
 export interface ExecutionResult {
   id: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "skipped";
   actionId?: string;
   error?: string;
   resultUrl?: string | null;
+  mode?: ExecutionMode;
+  modeReason?: string;
 }

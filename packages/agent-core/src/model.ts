@@ -59,3 +59,12 @@ export function resolveModel() {
 
   return `${provider}:${modelId}`;
 }
+
+export function isModelConfigured(): boolean {
+  try {
+    resolveModel();
+    return true;
+  } catch {
+    return false;
+  }
+}

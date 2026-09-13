@@ -55,7 +55,7 @@ Tabme addresses this by:
 - Review page that:
   - Lists suggestions with checkboxes.
   - Allows approve/reject per suggestion.
-  - Executes one safe action on approval (`create_task` via Ambiguous when configured; otherwise mocked).
+  - Executes approved task suggestions through Ambiguous and reports the returned record ID/link.
   - Shows completion result.
 - Clear error handling for unsupported pages and failures.
 
@@ -99,7 +99,7 @@ The review page lists suggestions, supports per-item selection, and **Approve se
 
 > As a user, I want approved suggestions to trigger one concrete action so that I see value immediately.
 
-`create_task` writes to Ambiguous when `AMBIGUOUS_API_KEY` is set. Other types are mocked. The page shows a result summary and any provider ID/link.
+Every generated suggestion is a `create_task`. It writes to Ambiguous after approval, or fails clearly without reporting a simulated completion. The page shows the result summary and any provider ID/link.
 
 ### US5: Handle Failures Gracefully
 
@@ -123,7 +123,7 @@ Use `chrome.tabs.query` for the current window. Collect `id`, `url`, `title`. Sk
 
 ### FR4: Execution
 
-`POST /api/execute-suggestions` with `reviewId` and `approvedIds`. One real or mocked action. Return a result summary.
+`POST /api/execute-suggestions` with `reviewId` and `approvedIds`. Creates the selected real tasks and returns a result summary.
 
 ### FR5: Error Handling
 
@@ -202,7 +202,7 @@ Implemented on the Next.js app (`apps/web`, port 3100):
 - Extension or sample path captures tabs.
 - Backend generates 3–5 suggestions.
 - Review page allows approval.
-- One action completes (real or mocked).
+- Selected tasks complete with real Ambiguous task IDs or links.
 - Demo finishes in under 3 minutes.
 
 ---

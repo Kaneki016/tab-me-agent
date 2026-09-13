@@ -4,6 +4,10 @@
  *
  * Workplace writes stay off this runtime. Approved create_task actions go
  * through /api/execute-suggestions after the review-page click.
+ *
+ * Thread identity: CopilotRuntime v2 AgentFactoryContext is `{ request }` only.
+ * handle-run later sets agent.threadId from the client run payload. The factory
+ * still uses a placeholder UUID because the agents callback has no threadId.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -11,15 +15,16 @@ import {
   CopilotRuntime,
   createCopilotHonoHandler,
 } from "@copilotkit/runtime/v2";
-import { makeAgent, SYSTEM_PROMPT } from "agent-core";
+import { buildSystemPrompt, isSearchConfigured, makeAgent } from "agent-core";
 
 function createWebAgent() {
+  const prompt = buildSystemPrompt({ searchConfigured: isSearchConfigured() });
   try {
-    return makeAgent(randomUUID(), { workplace: false });
+    return makeAgent(randomUUID(), { workplace: false, prompt });
   } catch {
     const agent = new BuiltInAgent({
       model: "openai:gpt-5.6-sol",
-      prompt: SYSTEM_PROMPT,
+      prompt,
       maxSteps: 10,
     });
     agent.threadId = randomUUID();
