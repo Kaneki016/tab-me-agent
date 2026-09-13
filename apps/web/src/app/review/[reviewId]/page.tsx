@@ -5,14 +5,53 @@ import { useParams } from "next/navigation";
 import { CopilotChat, useConfigureSuggestions } from "@copilotkit/react-core/v2";
 import { GenerativeUI } from "@/components/generative-ui";
 import { ReviewControl } from "@/components/review-control";
-import type { ExecutionResult, ReviewSession, Suggestion } from "@/lib/types";
+import type {
+  ExecutionResult,
+  ReviewSession,
+  Suggestion,
+  SuggestionType,
+} from "@/lib/types";
 
 function isSelectable(suggestion: Suggestion): boolean {
   return suggestion.status === "pending_review" || suggestion.status === "failed";
 }
 
+function destinationLabel(type: SuggestionType): string {
+  switch (type) {
+    case "save_note":
+    case "create_doc":
+      return "New doc";
+    case "add_competitor":
+      return "Competitor sheet";
+    case "add_crm":
+      return "CRM contact";
+    case "draft_email":
+      return "Email draft";
+    case "upload_drive":
+      return "Drive upload";
+    default:
+      return "Task";
+  }
+}
+
+function executionModeLabel(type: SuggestionType): string {
+  switch (type) {
+    case "save_note":
+    case "create_doc":
+      return "Doc saved";
+    case "add_competitor":
+      return "Sheet created";
+    case "add_crm":
+      return "Contact added";
+    case "draft_email":
+      return "Draft saved";
+    default:
+      return "Task created";
+  }
+}
+
 function summarizeExecution(results: ExecutionResult[]): string {
-  let real = 0;
+  const surfaces = new Map<string, number>();
   let mock = 0;
   let failed = 0;
 
@@ -22,12 +61,21 @@ function summarizeExecution(results: ExecutionResult[]): string {
       continue;
     }
     if (item.status === "skipped") continue;
-    if (item.mode === "real") real += 1;
-    else if (item.mode === "mock") mock += 1;
+    if (item.mode === "mock") {
+      mock += 1;
+      continue;
+    }
+    if (item.mode === "real") {
+      const surface = item.surface ?? "task";
+      surfaces.set(surface, (surfaces.get(surface) ?? 0) + 1);
+    }
   }
 
   const parts: string[] = [];
-  if (real > 0) parts.push(`${real} written to Ambiguous`);
+  for (const [surface, count] of surfaces) {
+    parts.push(`${count} ${surface}${count === 1 ? "" : "s"}`);
+  }
+  if (parts.length > 0) parts.push("written to Ambiguous");
   if (mock > 0) parts.push(`${mock} simulated locally`);
   if (failed > 0) parts.push(`${failed} failed`);
 
@@ -245,14 +293,16 @@ export default function ReviewPage() {
                       : ""}
                     {suggestion.actionId ? ` · ${suggestion.actionId}` : ""}
                   </span>
-                  <span className="category-chip">Task</span>
+                  <span className="category-chip">{destinationLabel(suggestion.type)}</span>
                   {suggestion.mode ? (
                     <span
                       className="mode-chip"
                       data-mode={suggestion.mode}
                       title={suggestion.modeReason}
                     >
-                      {suggestion.mode === "real" ? "Task created" : "Legacy simulated"}
+                      {suggestion.mode === "real"
+                        ? executionModeLabel(suggestion.type)
+                        : "Legacy simulated"}
                     </span>
                   ) : null}
                   {suggestion.resultUrl ? (
@@ -293,7 +343,7 @@ export default function ReviewPage() {
           {results ? (
             <section className="execution-summary" aria-live="polite">
               <p className="notice" role="status">
-                {summarizeExecution(results)} Open Ambiguous to see the task list.
+                {summarizeExecution(results)} Open Ambiguous to see your records.
               </p>
               <ul className="execution-list">
                 {results.map((item) => {
@@ -302,7 +352,7 @@ export default function ReviewPage() {
                   );
                   return (
                     <li key={item.id}>
-                      <strong>{suggestion?.title ?? "Tabme task"}</strong>
+                      <strong>{suggestion?.title ?? "Tabme suggestion"}</strong>
                       {item.actionId ? <code>{item.actionId}</code> : null}
                       {item.resultUrl ? (
                         <a href={item.resultUrl} target="_blank" rel="noreferrer">

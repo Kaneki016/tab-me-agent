@@ -19,6 +19,7 @@ afterEach(() => {
 
 test("allows chrome-extension and loopback 3100 origins", () => {
   assert.equal(isAllowedOrigin("chrome-extension://abcdef"), true);
+  assert.equal(isAllowedOrigin("moz-extension://abcdef-1234"), true);
   assert.equal(isAllowedOrigin("http://127.0.0.1:3100"), true);
   assert.equal(isAllowedOrigin("http://localhost:3100"), true);
   assert.equal(isAllowedOrigin("https://evil.example"), false);

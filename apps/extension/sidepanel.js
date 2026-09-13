@@ -1,12 +1,29 @@
 import { captureTabs } from "./utils/tabs.js";
 import { formatGroupTitle } from "./utils/group-title.js";
-
-const API_BASE = "http://127.0.0.1:3100";
+import { browserApi } from "./utils/browser-runtime.js";
+import {
+  MAX_APPROVALS_PER_EXECUTION,
+  askAssistant,
+  describeError,
+  executeSuggestions,
+  fetchHealth,
+  fetchReview,
+  generateSuggestions,
+} from "./utils/api.js";
+import {
+  categoryLabel,
+  groupByCategory,
+  summarizeSurfaces,
+  surfaceLabel,
+  surfaceOf,
+  typeLabel,
+} from "./utils/taxonomy.js";
 
 // State
 let session = null;
 let selectedIds = new Set();
 let executing = false;
+let health = { online: false, model: false, workplace: false, search: false };
 
 // DOM Elements
 const initialStateEl = document.getElementById("initialState");
@@ -35,10 +52,10 @@ const openDashboardBtn = document.getElementById("openDashboardBtn");
 // Event Listeners
 if (openDashboardBtn) {
   openDashboardBtn.addEventListener("click", () => {
-    const url = chrome.runtime.getURL(
+    const url = browserApi.runtime.getURL(
       "dashboard.html" + (session?.reviewId ? `?reviewId=${session.reviewId}` : "")
     );
-    chrome.tabs.create({ url });
+    browserApi.tabs.create({ url });
   });
 }
 captureBtn.addEventListener("click", () => handleCapture());
@@ -46,15 +63,24 @@ recaptureBtn.addEventListener("click", () => handleCapture());
 
 selectAllBtn.addEventListener("click", () => {
   if (!session) return;
-  const pending = session.suggestions.filter((s) => s.status === "pending_review");
-  if (selectedIds.size === pending.length) {
+  if (selectedIds.size > 0) {
     selectedIds.clear();
   } else {
-    selectedIds = new Set(pending.map((s) => s.id));
+    selectedIds = defaultSelection(session.suggestions);
   }
   updateSelectedCount();
   renderSuggestions();
 });
+
+/** Pre-checks everything still awaiting review, within the per-run approval cap. */
+function defaultSelection(suggestions) {
+  return new Set(
+    (suggestions ?? [])
+      .filter((suggestion) => suggestion.status === "pending_review")
+      .slice(0, MAX_APPROVALS_PER_EXECUTION)
+      .map((suggestion) => suggestion.id),
+  );
+}
 
 approveBtn.addEventListener("click", () => handleApprove());
 
@@ -89,36 +115,15 @@ async function handleCapture() {
 
     initialStatusEl.textContent = `Sending ${tabs.length} tabs to Tabme agent…`;
 
-    const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabs }),
-    });
-
-    const data = await response.json();
-    if (!response.ok || !data.reviewId) {
-      throw new Error(data.error || "Backend failed to generate suggestions. Ensure web app is running.");
-    }
-
-    // Load fresh session details
-    const sessionRes = await fetch(`${API_BASE}/api/suggestions/${data.reviewId}`);
-    const sessionData = await sessionRes.json();
-    if (!sessionRes.ok || !sessionData.success) {
-      throw new Error(sessionData.error || "Could not retrieve review session.");
-    }
-
-    session = sessionData;
-    selectedIds = new Set(
-      session.suggestions
-        .filter((s) => s.status === "pending_review")
-        .map((s) => s.id),
-    );
+    health = await fetchHealth();
+    const { reviewId } = await generateSuggestions(tabs);
+    session = await fetchReview(reviewId);
+    selectedIds = defaultSelection(session.suggestions);
 
     renderSession();
   } catch (err) {
     console.error(err);
-    const msg = err instanceof Error ? err.message : "Failed to capture tabs.";
-    initialStatusEl.textContent = msg;
+    initialStatusEl.textContent = describeError(err);
     initialStatusEl.className = "meta status-text alert";
   } finally {
     captureBtn.disabled = false;
@@ -135,8 +140,10 @@ function renderSession() {
   sessionPill.hidden = false;
   sessionPill.textContent = session.reviewId;
 
-  // Web Review Link
-  openWebReviewLink.href = `${API_BASE}/review/${session.reviewId}`;
+  // Full review lives in the extension dashboard, not the web app
+  openWebReviewLink.href = browserApi.runtime.getURL(
+    `dashboard.html?reviewId=${encodeURIComponent(session.reviewId)}`,
+  );
 
   // Tabs
   tabCountLabel.textContent = `Captured tabs (${session.tabs.length})`;
@@ -161,6 +168,13 @@ function renderSession() {
   // Suggestions
   renderSuggestions();
   updateSelectedCount();
+
+  if (!health.workplace) {
+    showExecutionNote(
+      "Ambiguous is not configured, so approvals will fail. Set AMBIGUOUS_API_KEY in the root .env.",
+      "error",
+    );
+  }
 }
 
 function renderSuggestions() {
@@ -175,75 +189,120 @@ function renderSuggestions() {
     return;
   }
 
-  session.suggestions.forEach((suggestion) => {
-    const item = document.createElement("div");
-    item.className = "suggestion-item";
+  for (const { category, items } of groupByCategory(session.suggestions)) {
+    const group = document.createElement("section");
+    group.className = "category-group";
 
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.id = `sug_${suggestion.id}`;
-    checkbox.checked = selectedIds.has(suggestion.id);
-    checkbox.disabled = session.status === "executed" || suggestion.status !== "pending_review";
+    const heading = document.createElement("h3");
+    heading.className = "category-heading";
+    heading.textContent = categoryLabel(category);
 
-    checkbox.addEventListener("change", (e) => {
-      if (e.target.checked) {
-        selectedIds.add(suggestion.id);
-      } else {
-        selectedIds.delete(suggestion.id);
+    const count = document.createElement("span");
+    count.className = "category-count";
+    count.textContent = String(items.length);
+    heading.appendChild(count);
+    group.appendChild(heading);
+
+    for (const suggestion of items) {
+      group.appendChild(renderSuggestionRow(suggestion));
+    }
+    suggestionsList.appendChild(group);
+  }
+}
+
+function renderSuggestionRow(suggestion) {
+  const item = document.createElement("div");
+  item.className = "suggestion-item";
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.id = `sug_${suggestion.id}`;
+  checkbox.checked = selectedIds.has(suggestion.id);
+  checkbox.disabled =
+    session.status === "executed" || suggestion.status !== "pending_review";
+
+  checkbox.addEventListener("change", (event) => {
+    if (event.target.checked) {
+      if (selectedIds.size >= MAX_APPROVALS_PER_EXECUTION) {
+        event.target.checked = false;
+        showExecutionNote(
+          `Approve up to ${MAX_APPROVALS_PER_EXECUTION} actions at a time.`,
+          "error",
+        );
+        return;
       }
-      updateSelectedCount();
-    });
-
-    const body = document.createElement("div");
-    body.className = "suggestion-body";
-
-    const title = document.createElement("span");
-    title.className = "suggestion-title";
-    title.textContent = suggestion.title;
-    body.appendChild(title);
-
-    if (suggestion.description) {
-      const desc = document.createElement("span");
-      desc.className = "suggestion-meta";
-      desc.textContent = suggestion.description;
-      body.appendChild(desc);
+      selectedIds.add(suggestion.id);
+    } else {
+      selectedIds.delete(suggestion.id);
     }
-
-    const meta = document.createElement("span");
-    meta.className = "suggestion-meta";
-    const typeLabel = suggestion.type.replaceAll("_", " ");
-    const statusPart = suggestion.status !== "pending_review" ? ` · ${suggestion.status}` : "";
-    const actionPart = suggestion.actionId ? ` · ${suggestion.actionId}` : "";
-    meta.textContent = `${typeLabel}${statusPart}${actionPart}`;
-
-    if (suggestion.status !== "pending_review") {
-      const badge = document.createElement("span");
-      badge.className = `status-badge ${suggestion.status}`;
-      badge.textContent = suggestion.status;
-      meta.appendChild(badge);
-    }
-    body.appendChild(meta);
-
-    if (suggestion.resultUrl) {
-      const link = document.createElement("a");
-      link.href = suggestion.resultUrl;
-      link.target = "_blank";
-      link.className = "meta";
-      link.textContent = "Open workplace record ↗";
-      body.appendChild(link);
-    }
-
-    if (suggestion.error) {
-      const err = document.createElement("span");
-      err.className = "alert";
-      err.textContent = suggestion.error;
-      body.appendChild(err);
-    }
-
-    item.appendChild(checkbox);
-    item.appendChild(body);
-    suggestionsList.appendChild(item);
+    updateSelectedCount();
   });
+
+  const body = document.createElement("div");
+  body.className = "suggestion-body";
+
+  const title = document.createElement("label");
+  title.className = "suggestion-title";
+  title.setAttribute("for", checkbox.id);
+  title.textContent = suggestion.title;
+  body.appendChild(title);
+
+  if (suggestion.description) {
+    const desc = document.createElement("span");
+    desc.className = "suggestion-meta";
+    desc.textContent = suggestion.description;
+    body.appendChild(desc);
+  }
+
+  const meta = document.createElement("span");
+  meta.className = "suggestion-meta suggestion-routing";
+
+  const surface = surfaceOf(suggestion);
+  const destination = document.createElement("span");
+  destination.className = "destination-badge";
+  destination.dataset.surface = surface;
+  destination.textContent = surfaceLabel(surface);
+  destination.title = `Approving writes this as an ${surfaceLabel(surface)}.`;
+  meta.appendChild(destination);
+
+  const facts = document.createElement("span");
+  facts.textContent = typeLabel(suggestion.type);
+  meta.appendChild(facts);
+
+  if (suggestion.status !== "pending_review") {
+    const badge = document.createElement("span");
+    badge.className = `status-badge ${suggestion.status}`;
+    badge.textContent = suggestion.status.replaceAll("_", " ");
+    meta.appendChild(badge);
+  }
+  body.appendChild(meta);
+
+  if (suggestion.resultUrl) {
+    const link = document.createElement("a");
+    link.href = suggestion.resultUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.className = "meta";
+    link.textContent = `Open ${surfaceLabel(surface)} in Ambiguous ↗`;
+    body.appendChild(link);
+  } else if (suggestion.actionId) {
+    // Ambiguous does not return a URL for every record kind
+    const ref = document.createElement("code");
+    ref.className = "suggestion-meta";
+    ref.textContent = suggestion.actionId;
+    body.appendChild(ref);
+  }
+
+  if (suggestion.error) {
+    const err = document.createElement("span");
+    err.className = "suggestion-meta alert";
+    err.textContent = suggestion.error;
+    body.appendChild(err);
+  }
+
+  item.appendChild(checkbox);
+  item.appendChild(body);
+  return item;
 }
 
 function updateSelectedCount() {
@@ -256,53 +315,67 @@ async function handleApprove() {
 
   executing = true;
   approveBtn.disabled = true;
-  executionResultEl.hidden = false;
-  executionResultEl.className = "result-banner";
-  executionResultEl.textContent = "Executing approved suggestions…";
+  showExecutionNote("Writing approved actions to Ambiguous…");
 
   try {
     const approvedList = Array.from(selectedIds);
-    const response = await fetch(`${API_BASE}/api/execute-suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reviewId: session.reviewId,
-        approvedIds: approvedList,
-      }),
-    });
+    const data = await executeSuggestions(session.reviewId, approvedList);
+    const results = data.results ?? [];
 
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || "Execution failed.");
+    const written = results.filter(
+      (result) => result.status === "completed" || result.status === "skipped",
+    );
+    const failures = results.filter((result) => result.status === "failed");
+
+    const summary = [];
+    if (written.length) summary.push(`Created ${summarizeSurfaces(written)} in Ambiguous.`);
+    if (failures.length) {
+      summary.push(
+        `${failures.length} could not be written${failures[0].error ? `: ${failures[0].error}` : "."}`,
+      );
     }
+    showExecutionNote(
+      summary.join(" ") || "Nothing was written.",
+      failures.length ? "error" : "success",
+      written.length > 0,
+    );
 
-    const completed = (data.results ?? []).filter((r) => r.status === "completed").length;
-    const failed = (data.results ?? []).filter((r) => r.status === "failed").length;
-
-    executionResultEl.className = failed ? "result-banner error" : "result-banner success";
-    executionResultEl.textContent = failed
-      ? `Completed ${completed} actions. ${failed} failed.`
-      : `Completed ${completed} actions successfully.`;
-
-    // Direct Browser Action: Group triaged tabs in Chrome
-    if (groupTabsCheckbox.checked && chrome.tabs?.group) {
+    // Direct browser action: group triaged tabs, if this browser supports it
+    if (groupTabsCheckbox.checked && browserApi.tabs?.group) {
       await groupApprovedTabs(approvedList);
     }
 
-    // Refresh review session state
-    const refreshRes = await fetch(`${API_BASE}/api/suggestions/${session.reviewId}`);
-    const refreshData = await refreshRes.json();
-    if (refreshRes.ok && refreshData.success) {
-      session = refreshData;
-      renderSuggestions();
-    }
+    // Refresh so each row shows the Ambiguous record it produced
+    session = await fetchReview(session.reviewId);
+    selectedIds.clear();
+    renderSuggestions();
   } catch (err) {
     console.error(err);
-    executionResultEl.className = "result-banner error";
-    executionResultEl.textContent = err instanceof Error ? err.message : "Execution failed.";
+    showExecutionNote(describeError(err), "error");
   } finally {
     executing = false;
     updateSelectedCount();
+  }
+}
+
+/**
+ * Ambiguous doesn't return a web URL for every record kind (see the actionId
+ * fallback in renderSuggestionRow), so the reliable way to see what just got
+ * created is the workspace itself, not a per-record deep link.
+ */
+function showExecutionNote(text, tone = "", showWorkspaceLink = false) {
+  executionResultEl.hidden = false;
+  executionResultEl.className = tone ? `result-banner ${tone}` : "result-banner";
+  executionResultEl.textContent = "";
+  executionResultEl.appendChild(document.createTextNode(text));
+  if (showWorkspaceLink) {
+    executionResultEl.appendChild(document.createTextNode(" "));
+    const link = document.createElement("a");
+    link.href = "https://app.ambiguous.ai";
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open Ambiguous workspace ↗";
+    executionResultEl.appendChild(link);
   }
 }
 
@@ -327,16 +400,16 @@ async function groupApprovedTabs(approvedSuggestionIds) {
       .map((tab) => tab.id);
 
     if (tabIdsToGroup.length > 0) {
-      const groupId = await chrome.tabs.group({ tabIds: tabIdsToGroup });
-      if (chrome.tabGroups?.update) {
-        await chrome.tabGroups.update(groupId, {
+      const groupId = await browserApi.tabs.group({ tabIds: tabIdsToGroup });
+      if (browserApi.tabGroups?.update) {
+        await browserApi.tabGroups.update(groupId, {
           title: formatGroupTitle(session.tabs),
           color: "cyan",
         });
       }
     }
   } catch (groupError) {
-    console.warn("Could not group tabs in Chrome:", groupError);
+    console.warn("Could not group tabs:", groupError);
   }
 }
 
@@ -347,27 +420,16 @@ async function sendChatMessage(promptText) {
   const thinkingBubble = appendChatBubble("Thinking…", "assistant");
 
   try {
-    const response = await fetch(`${API_BASE}/api/assistant`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reviewId: session?.reviewId,
-        tabs: session?.tabs,
-        suggestions: session?.suggestions,
-        message: promptText,
-      }),
+    const data = await askAssistant({
+      reviewId: session?.reviewId,
+      tabs: session?.tabs,
+      suggestions: session?.suggestions,
+      message: promptText,
     });
-
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || "Assistant unavailable.");
-    }
-
     thinkingBubble.textContent = data.reply;
   } catch (err) {
     console.error("Chat error:", err);
-    thinkingBubble.textContent =
-      "Could not reach the Tabme assistant. Make sure the web app is running at http://127.0.0.1:3100.";
+    thinkingBubble.textContent = describeError(err);
   }
 }
 

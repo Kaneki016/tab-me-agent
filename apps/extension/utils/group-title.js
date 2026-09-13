@@ -1,5 +1,5 @@
 /**
- * Format an intelligent, concise title for Chrome tab groups and Tabme sessions.
+ * Format an intelligent, concise title for browser tab groups and Tabme sessions.
  * Instead of generic timestamps like "Tabme: 1:52 PM", this recognizes the primary
  * domains or activities represented by the open tabs.
  */
@@ -14,6 +14,7 @@ export function formatGroupTitle(tabs) {
       t.url &&
       !t.url.startsWith("chrome://") &&
       !t.url.startsWith("chrome-extension://") &&
+      !t.url.startsWith("moz-extension://") &&
       !t.url.startsWith("edge://") &&
       !t.url.startsWith("about:")
   );

@@ -9,18 +9,54 @@ import {
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { WorkplaceTask } from "../followup-types";
-export type { WorkplaceTask } from "../followup-types";
+import type { WorkplaceRecord, WorkplaceRecordKind } from "../followup-types";
+export type { WorkplaceRecord, WorkplaceRecordKind } from "../followup-types";
 
 export interface Workplace {
   identity(): Promise<{ id: string; workspaceId: string; name: string }>;
-  list(marker: string): Promise<WorkplaceTask[]>;
-  get(id: string): Promise<WorkplaceTask>;
+  list(marker: string): Promise<WorkplaceRecord[]>;
+  get(id: string): Promise<WorkplaceRecord>;
   create(
     title: string,
     description: string,
     beforeWrite: () => Promise<void>,
-  ): Promise<WorkplaceTask>;
+  ): Promise<WorkplaceRecord>;
+  listDocuments(label: string): Promise<WorkplaceRecord[]>;
+  createDocument(
+    args: {
+      type: "doc" | "sheet" | "slide";
+      title: string;
+      content: string;
+      labels: string[];
+    },
+    beforeWrite: () => Promise<void>,
+  ): Promise<WorkplaceRecord>;
+  createSheet(beforeWrite: () => Promise<void>): Promise<WorkplaceRecord>;
+  appendSheetValues(
+    id: string,
+    range: string,
+    values: string[][],
+    beforeWrite: () => Promise<void>,
+  ): Promise<void>;
+  findContacts(q: string): Promise<WorkplaceRecord[]>;
+  createContact(
+    args: {
+      type?: "person" | "company";
+      name: string;
+      website?: string;
+      industry?: string;
+      custom_properties?: Record<string, string>;
+    },
+    beforeWrite: () => Promise<void>,
+  ): Promise<WorkplaceRecord>;
+  createDraftEmail(
+    args: {
+      subject: string;
+      body_markdown: string;
+      idempotency_key: string;
+    },
+    beforeWrite: () => Promise<void>,
+  ): Promise<WorkplaceRecord>;
 }
 export interface McpConnection {
   listTools(params?: { cursor?: string }): Promise<ListToolsResult>;
@@ -29,12 +65,6 @@ export interface McpConnection {
     arguments: Record<string, unknown>;
   }): Promise<CallToolResult>;
 }
-const taskSchema = z.object({
-  id: z.uuid(),
-  title: z.string().min(1),
-  description: z.string().nullable().optional(),
-  url: z.url().nullable().optional(),
-});
 const identitySchema = z.object({
   id: z.string().min(1),
   workspace_id: z.string().min(1),
@@ -61,24 +91,65 @@ function payload(result: CallToolResult): unknown {
     );
   }
 }
-function task(value: unknown): WorkplaceTask {
-  const parsed = taskSchema.safeParse(value);
-  if (!parsed.success)
-    throw new FollowupError("Ambiguous returned an invalid task record.");
-  const { id, title, description, url } = parsed.data;
-  if (url) {
-    const link = new URL(url);
-    if (
-      link.protocol !== "https:" ||
-      link.username ||
-      link.password ||
-      link.hostname !== "app.ambiguous.ai"
-    ) {
-      throw new FollowupError("Ambiguous returned an unsafe record link.");
-    }
+
+function safeUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const link = new URL(value);
+  if (
+    link.protocol !== "https:" ||
+    link.username ||
+    link.password ||
+    link.hostname !== "app.ambiguous.ai"
+  ) {
+    throw new FollowupError("Ambiguous returned an unsafe record link.");
   }
-  // The published Task schema does not promise a URL. Never manufacture one.
-  return { id, title, description: description ?? "", url: url ?? null };
+  return value;
+}
+
+function recordFromFields(
+  value: unknown,
+  kind: WorkplaceRecordKind,
+  title: string,
+): WorkplaceRecord {
+  const parsed = z.object({ id: z.uuid(), url: z.url().nullable().optional() }).parse(value);
+  return {
+    kind,
+    id: parsed.id,
+    title,
+    url: safeUrl(parsed.url ?? null),
+  };
+}
+
+function recordWithTitle(
+  value: unknown,
+  kind: WorkplaceRecordKind,
+  titleField: "title" | "name" | "subject" = "title",
+): WorkplaceRecord {
+  const parsed = z
+    .object({
+      id: z.uuid(),
+      title: z.string().min(1).nullish(),
+      name: z.string().min(1).nullish(),
+      subject: z.string().min(1).nullish(),
+      url: z.url().nullish(),
+    })
+    .safeParse(value);
+  if (!parsed.success)
+    throw new FollowupError(`Ambiguous returned an invalid ${kind} record.`);
+  const title = parsed.data[titleField] ?? parsed.data.title ?? parsed.data.name;
+  if (!title)
+    throw new FollowupError(`Ambiguous returned an invalid ${kind} record.`);
+  return recordFromFields(parsed.data, kind, title);
+}
+
+function nestedRecord(
+  value: unknown,
+  key: string,
+  kind: WorkplaceRecordKind,
+  titleField: "title" | "name" | "subject" = "title",
+): WorkplaceRecord {
+  const envelope = z.object({ [key]: z.unknown() }).safeParse(value);
+  return recordWithTitle(envelope.success ? envelope.data[key] : value, kind, titleField);
 }
 
 export class AmbiguousWorkplace implements Workplace {
@@ -132,27 +203,27 @@ export class AmbiguousWorkplace implements Workplace {
     description: string,
     beforeWrite: () => Promise<void>,
   ) {
-    const result = z
-      .object({ task: z.unknown() })
-      .parse(
-        await this.call("create_task", { title, description }, beforeWrite),
-      );
-    return task(result.task);
+    return nestedRecord(
+      await this.call("create_task", { title, description }, beforeWrite),
+      "task",
+      "task",
+    );
   }
   async get(id: string) {
     z.uuid().parse(id);
-    const result = z
-      .object({ task: z.unknown() })
-      .parse(await this.call("get_task", { id }));
-    const record = task(result.task);
-    if (record.id !== id)
+    const item = nestedRecord(
+      await this.call("get_task", { id }),
+      "task",
+      "task",
+    );
+    if (item.id !== id)
       throw new FollowupError(
         "Ambiguous returned a different task ID than requested.",
       );
-    return record;
+    return item;
   }
   async list(marker: string) {
-    const records: WorkplaceTask[] = [];
+    const records: WorkplaceRecord[] = [];
     const seen = new Set<string>();
     let cursor: string | undefined;
     do {
@@ -168,7 +239,7 @@ export class AmbiguousWorkplace implements Workplace {
           next_cursor: z.string().optional(),
         })
         .parse(value);
-      records.push(...result.data.map(task));
+      records.push(...result.data.map((item) => recordWithTitle(item, "task")));
       if (!result.has_more) return records;
       cursor = result.next_cursor;
       if (!cursor || seen.has(cursor))
@@ -182,6 +253,150 @@ export class AmbiguousWorkplace implements Workplace {
         );
     } while (cursor);
     return records;
+  }
+  async listDocuments(label: string) {
+    const records: WorkplaceRecord[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const value = await this.call("list_documents", {
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      const result = z
+        .object({
+          data: z.array(z.unknown()),
+          has_more: z.boolean(),
+          next_cursor: z.string().optional(),
+        })
+        .parse(value);
+      for (const item of result.data) {
+        const parsed = z
+          .object({
+            id: z.uuid(),
+            title: z.string(),
+            labels: z.array(z.string()).optional(),
+          })
+          .safeParse(item);
+        if (!parsed.success) continue;
+        if (!parsed.data.labels?.includes(label)) continue;
+        records.push({
+          kind: "document",
+          id: parsed.data.id,
+          title: parsed.data.title,
+          url: null,
+        });
+      }
+      if (!result.has_more) return records;
+      cursor = result.next_cursor;
+      if (!cursor || seen.has(cursor))
+        throw new FollowupError(
+          "Ambiguous document pagination is incomplete; refresh before attempting a write.",
+        );
+      seen.add(cursor);
+      if (seen.size >= 100)
+        throw new FollowupError(
+          "Ambiguous document pagination exceeded this demo's limit.",
+        );
+    } while (cursor);
+    return records;
+  }
+  async createDocument(
+    args: {
+      type: "doc" | "sheet" | "slide";
+      title: string;
+      content: string;
+      labels: string[];
+    },
+    beforeWrite: () => Promise<void>,
+  ) {
+    return nestedRecord(
+      await this.call("create_document", args, beforeWrite),
+      "document",
+      "document",
+    );
+  }
+  async createSheet(beforeWrite: () => Promise<void>) {
+    return nestedRecord(
+      await this.call("create_sheet", {}, beforeWrite),
+      "sheet",
+      "sheet",
+    );
+  }
+  async appendSheetValues(
+    id: string,
+    range: string,
+    values: string[][],
+    beforeWrite: () => Promise<void>,
+  ) {
+    z.uuid().parse(id);
+    await this.call("append_sheet_values", { id, range, values }, beforeWrite);
+  }
+  async findContacts(q: string) {
+    const records: WorkplaceRecord[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const value = await this.call("list_contacts", {
+        q,
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      const result = z
+        .object({
+          data: z.array(z.unknown()),
+          has_more: z.boolean(),
+          next_cursor: z.string().optional(),
+        })
+        .parse(value);
+      records.push(
+        ...result.data.map((item) => recordWithTitle(item, "contact", "name")),
+      );
+      if (!result.has_more) return records;
+      cursor = result.next_cursor;
+      if (!cursor || seen.has(cursor))
+        throw new FollowupError(
+          "Ambiguous contact pagination is incomplete; refresh before attempting a write.",
+        );
+      seen.add(cursor);
+      if (seen.size >= 100)
+        throw new FollowupError(
+          "Ambiguous contact pagination exceeded this demo's limit.",
+        );
+    } while (cursor);
+    return records;
+  }
+  async createContact(
+    args: {
+      type?: "person" | "company";
+      name: string;
+      website?: string;
+      industry?: string;
+      custom_properties?: Record<string, string>;
+    },
+    beforeWrite: () => Promise<void>,
+  ) {
+    return nestedRecord(
+      await this.call("create_contact", args, beforeWrite),
+      "contact",
+      "contact",
+      "name",
+    );
+  }
+  async createDraftEmail(
+    args: {
+      subject: string;
+      body_markdown: string;
+      idempotency_key: string;
+    },
+    beforeWrite: () => Promise<void>,
+  ) {
+    return nestedRecord(
+      await this.call("create_draft_email", args, beforeWrite),
+      "draft",
+      "draft_email",
+      "subject",
+    );
   }
 }
 

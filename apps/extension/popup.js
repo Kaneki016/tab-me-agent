@@ -1,5 +1,6 @@
 import { captureTabs } from "./utils/tabs.js";
 import { formatGroupTitle } from "./utils/group-title.js";
+import { browserApi, isFirefox } from "./utils/browser-runtime.js";
 
 const groupAndOpenBtn = document.getElementById("groupAndOpenBtn");
 const openDashboardBtn = document.getElementById("openDashboardBtn");
@@ -17,7 +18,7 @@ groupAndOpenBtn.addEventListener("click", async () => {
   groupAndOpenBtn.disabled = true;
 
   try {
-    const currentWindow = await chrome.windows.getCurrent();
+    const currentWindow = await browserApi.windows.getCurrent();
     const tabs = await captureTabs();
     if (!tabs.length) {
       throw new Error("No tabs found in this window.");
@@ -27,6 +28,7 @@ groupAndOpenBtn.addEventListener("click", async () => {
     const isExtensionUrl = (url) =>
       !url ||
       url.startsWith("chrome-extension://") ||
+      url.startsWith("moz-extension://") ||
       url.startsWith("chrome://") ||
       url.startsWith("edge://") ||
       url.startsWith("about:");
@@ -50,28 +52,28 @@ groupAndOpenBtn.addEventListener("click", async () => {
     };
 
     // Save session immediately to local storage
-    if (chrome.storage?.local) {
-      const stored = await chrome.storage.local.get(["savedSessions"]);
+    if (browserApi.storage?.local) {
+      const stored = await browserApi.storage.local.get(["savedSessions"]);
       const savedSessions = Array.isArray(stored.savedSessions) ? stored.savedSessions : [];
       savedSessions.unshift(newSession);
-      await chrome.storage.local.set({
+      await browserApi.storage.local.set({
         savedSessions,
         activeSessionId: newSession.id,
       });
     }
 
     // Open Dashboard page in current window FIRST
-    const dashboardUrl = chrome.runtime.getURL(`dashboard.html?sessionId=${newSession.id}`);
-    await chrome.tabs.create({
+    const dashboardUrl = browserApi.runtime.getURL(`dashboard.html?sessionId=${newSession.id}`);
+    await browserApi.tabs.create({
       windowId: currentWindow.id,
       url: dashboardUrl,
       active: true,
     });
 
     // Close all stashed tabs in the browser (they will only restore when user asks)
-    if (tabIdsToClose.length > 0 && chrome.tabs?.remove) {
+    if (tabIdsToClose.length > 0 && browserApi.tabs?.remove) {
       try {
-        await chrome.tabs.remove(tabIdsToClose);
+        await browserApi.tabs.remove(tabIdsToClose);
       } catch (removeErr) {
         console.warn("Could not close tabs:", removeErr);
       }
@@ -87,17 +89,32 @@ groupAndOpenBtn.addEventListener("click", async () => {
 
 // 2. Open Existing Dashboard
 openDashboardBtn.addEventListener("click", async () => {
-  const dashboardUrl = chrome.runtime.getURL("dashboard.html");
-  await chrome.tabs.create({ url: dashboardUrl });
+  const dashboardUrl = browserApi.runtime.getURL("dashboard.html");
+  await browserApi.tabs.create({ url: dashboardUrl });
   window.close();
 });
 
-// 3. Open Side Panel
+// 3. Open Side Panel (Chrome) / Sidebar (Firefox)
 openPanelBtn.addEventListener("click", async () => {
+  // Firefox revokes "user input handler" status the instant a promise is
+  // awaited, so sidebarAction.open() must fire before any other await in
+  // this handler — it cannot go through the same tabs.query() path Chrome
+  // needs for a windowId.
+  if (isFirefox) {
+    try {
+      await browserApi.sidebarAction.open();
+      window.close();
+    } catch (err) {
+      console.error(err);
+      setStatus("Failed to open the sidebar.", "error");
+    }
+    return;
+  }
+
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.windowId && chrome.sidePanel?.open) {
-      await chrome.sidePanel.open({ windowId: tab.windowId });
+    const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
+    if (tab?.windowId && browserApi.sidePanel?.open) {
+      await browserApi.sidePanel.open({ windowId: tab.windowId });
       window.close();
     } else {
       setStatus("Side panel not supported in this window.", "error");

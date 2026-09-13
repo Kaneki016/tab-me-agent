@@ -7,7 +7,7 @@ import type { ReviewSession } from "@/lib/types";
 export function ReviewControl({ session }: { session: ReviewSession }) {
   useAgentContext({
     description:
-      "The Tabme review currently on screen. CRITICAL: proposing in chat does not save anything. Only Approve Selected on the page executes. Never invent tabs or record links.",
+      "The Tabme review currently on screen. Each suggestion.type names its Ambiguous destination (task, doc, sheet, CRM contact, or email draft). CRITICAL: proposing in chat does not save anything. Only Approve Selected on the page executes. Never invent tabs or record links.",
     value: {
       reviewId: session.reviewId,
       status: session.status,

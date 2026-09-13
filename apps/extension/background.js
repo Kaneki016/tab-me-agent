@@ -1,9 +1,12 @@
-// Tabme Background Service Worker
+// Tabme background: a service worker on Chrome, an event page on Firefox.
+import { browserApi } from "./utils/browser-runtime.js";
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+browserApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "OPEN_DASHBOARD") {
-    const url = chrome.runtime.getURL(`dashboard.html${message.query ? `?${message.query}` : ""}`);
-    chrome.tabs.create({ url });
+    const url = browserApi.runtime.getURL(
+      `dashboard.html${message.query ? `?${message.query}` : ""}`,
+    );
+    browserApi.tabs.create({ url });
     sendResponse({ success: true });
     return true;
   }

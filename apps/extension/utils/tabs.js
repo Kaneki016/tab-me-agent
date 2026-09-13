@@ -1,7 +1,9 @@
-export async function captureTabs() {
-  const chromeTabs = await chrome.tabs.query({ currentWindow: true });
+import { browserApi } from "./browser-runtime.js";
 
-  const tabs = chromeTabs.map((tab) => {
+export async function captureTabs() {
+  const capturedTabs = await browserApi.tabs.query({ currentWindow: true });
+
+  const tabs = capturedTabs.map((tab) => {
     const base = {
       id: tab.id,
       url: tab.url || "",
@@ -14,8 +16,9 @@ export async function captureTabs() {
       !tab.url ||
       tab.url.startsWith("chrome://") ||
       tab.url.startsWith("chrome-extension://") ||
-      tab.url.startsWith("edge://") ||
-      tab.url.startsWith("about:")
+      tab.url.startsWith("moz-extension://") ||
+      tab.url.startsWith("about:") ||
+      tab.url.startsWith("edge://")
     ) {
       return { ...base, status: "unsupported" };
     }
@@ -42,7 +45,7 @@ export async function captureTabs() {
 }
 
 async function scrapeTab(tabId) {
-  const results = await chrome.scripting.executeScript({
+  const results = await browserApi.scripting.executeScript({
     target: { tabId },
     func: () => document.body?.innerText ?? "",
   });

@@ -260,6 +260,35 @@ code {
   flex-direction: column;
 }
 
+/* Category groups mirror the agent's triage categories */
+.category-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.category-group + .category-group {
+  margin-top: 20px;
+}
+
+.category-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: "Figtree", sans-serif;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding-bottom: 6px;
+}
+
+.category-count {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0;
+}
+
 .suggestion-item {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -289,12 +318,52 @@ code {
 .suggestion-title {
   font-weight: 600;
   font-size: 0.95rem;
+  cursor: pointer;
 }
 
 .suggestion-meta {
   color: var(--ink-soft);
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+.suggestion-routing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Names the Ambiguous record this action will create */
+.destination-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--moss-soft);
+  color: var(--moss);
+  border: 1px solid #c3d3c2;
+  white-space: nowrap;
+}
+
+.destination-badge[data-surface="sheet"],
+.destination-badge[data-surface="contact"],
+.destination-badge[data-surface="email draft"] {
+  background: #f3e3d3;
+  color: var(--brass-deep);
+  border-color: #e0c6ab;
+}
+
+/* Unsupported destination: readable, but never looks approvable */
+.destination-badge[data-surface="drive upload"] {
+  background: #ece6dc;
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.alert {
+  color: var(--danger);
 }
 
 .status-badge {

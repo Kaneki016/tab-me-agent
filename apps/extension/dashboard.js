@@ -1,13 +1,30 @@
 import { captureTabs } from "./utils/tabs.js";
 import { formatGroupTitle } from "./utils/group-title.js";
-
-const API_BASE = "http://127.0.0.1:3100";
+import { browserApi } from "./utils/browser-runtime.js";
+import {
+  MAX_APPROVALS_PER_EXECUTION,
+  askAssistant,
+  describeError,
+  executeSuggestions,
+  fetchHealth,
+  fetchReview,
+  generateSuggestions,
+} from "./utils/api.js";
+import {
+  categoryLabel,
+  groupByCategory,
+  summarizeSurfaces,
+  surfaceLabel,
+  surfaceOf,
+  typeLabel,
+} from "./utils/taxonomy.js";
 
 // State
 let activeSession = null;
 let savedSessions = [];
 let selectedIds = new Set();
 let executing = false;
+let health = { online: false, model: false, workplace: false, search: false };
 const analyzingSessionIds = new Set();
 
 // DOM Elements
@@ -28,6 +45,11 @@ const approveBtn = document.getElementById("approveBtn");
 const selectedCountEl = document.getElementById("selectedCount");
 const closeTabsCheckbox = document.getElementById("closeTabsOnApprove");
 const executionBanner = document.getElementById("executionBanner");
+const triageSourceEl = document.getElementById("triageSource");
+const approvalHintEl = document.getElementById("approvalHint");
+const connectionStrip = document.getElementById("connectionStrip");
+const connectionDot = document.getElementById("connectionDot");
+const connectionText = document.getElementById("connectionText");
 
 const chatLog = document.getElementById("chatLog");
 const chatForm = document.getElementById("chatForm");
@@ -41,6 +63,7 @@ init();
 
 async function init() {
   bindEvents();
+  await refreshHealth();
   await loadStoredSessions();
 
   const urlParams = new URLSearchParams(window.location.search);
@@ -95,16 +118,42 @@ function bindEvents() {
   });
 }
 
+async function refreshHealth() {
+  health = await fetchHealth();
+  renderConnection();
+  return health;
+}
+
+function renderConnection() {
+  let tone = "ok";
+  let text = "Ambiguous connected";
+
+  if (!health.online) {
+    tone = "error";
+    text = "Backend offline — run npm run dev:web";
+  } else if (!health.workplace) {
+    tone = "warn";
+    text = "Ambiguous not configured — approvals will fail";
+  } else if (!health.model) {
+    tone = "warn";
+    text = "Ambiguous connected · no model key, using keyword triage";
+  }
+
+  connectionStrip.dataset.tone = tone;
+  connectionDot.dataset.tone = tone;
+  connectionText.textContent = text;
+}
+
 async function loadStoredSessions() {
-  if (!chrome.storage?.local) return;
-  const data = await chrome.storage.local.get(["savedSessions", "activeSessionId"]);
+  if (!browserApi.storage?.local) return;
+  const data = await browserApi.storage.local.get(["savedSessions", "activeSessionId"]);
   savedSessions = Array.isArray(data.savedSessions) ? data.savedSessions : [];
   renderHistory();
 }
 
 async function saveStoredSessions() {
-  if (!chrome.storage?.local) return;
-  await chrome.storage.local.set({
+  if (!browserApi.storage?.local) return;
+  await browserApi.storage.local.set({
     savedSessions,
     activeSessionId: activeSession?.id,
   });
@@ -115,7 +164,7 @@ async function captureAndConsolidate() {
   consolidateBtn.disabled = true;
 
   try {
-    const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [currentTab] = await browserApi.tabs.query({ active: true, currentWindow: true });
     const tabs = await captureTabs();
     if (!tabs.length) {
       throw new Error("No tabs found to capture in this window.");
@@ -124,6 +173,7 @@ async function captureAndConsolidate() {
     const isExtensionUrl = (url) =>
       !url ||
       url.startsWith("chrome-extension://") ||
+      url.startsWith("moz-extension://") ||
       url.startsWith("chrome://") ||
       url.startsWith("edge://") ||
       url.startsWith("about:");
@@ -157,9 +207,9 @@ async function captureAndConsolidate() {
     await saveStoredSessions();
 
     // Close the captured tabs so only dashboard remains open
-    if (tabIdsToClose.length > 0 && chrome.tabs?.remove) {
+    if (tabIdsToClose.length > 0 && browserApi.tabs?.remove) {
       try {
-        await chrome.tabs.remove(tabIdsToClose);
+        await browserApi.tabs.remove(tabIdsToClose);
       } catch (removeErr) {
         console.warn("Could not close captured tabs:", removeErr);
       }
@@ -179,40 +229,27 @@ async function triggerTabAnalysis(session) {
 
   analyzingSessionIds.add(session.id);
   session.status = "analyzing";
+  session.error = null;
   if (activeSession?.id === session.id) {
     renderSuggestions();
   }
 
   try {
-    const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabs: session.tabs }),
-    });
+    const { reviewId } = await generateSuggestions(session.tabs);
+    const review = await fetchReview(reviewId);
 
-    const resData = await response.json();
-    const reviewId = resData.reviewId;
-
-    if (reviewId) {
-      session.reviewId = reviewId;
-      const fetchReview = await fetch(`${API_BASE}/api/suggestions/${reviewId}`);
-      const reviewData = await fetchReview.json();
-      if (reviewData.success && Array.isArray(reviewData.suggestions)) {
-        session.suggestions = reviewData.suggestions;
-        session.status = "pending";
-      }
-    }
+    session.reviewId = reviewId;
+    session.suggestions = review.suggestions ?? [];
+    session.source = review.source;
+    session.status = review.status ?? "pending";
   } catch (err) {
     console.warn("Background tab triage failed:", err);
     session.status = "pending";
+    session.error = describeError(err);
   } finally {
     analyzingSessionIds.delete(session.id);
     if (activeSession?.id === session.id) {
-      selectedIds = new Set(
-        (activeSession.suggestions || [])
-          .filter((s) => s.status === "pending_review")
-          .map((s) => s.id)
-      );
+      selectedIds = defaultSelection(activeSession.suggestions);
       renderSuggestions();
       updateSelectedCount();
     }
@@ -222,9 +259,7 @@ async function triggerTabAnalysis(session) {
 
 async function loadFromBackend(reviewId) {
   try {
-    const res = await fetch(`${API_BASE}/api/suggestions/${reviewId}`);
-    const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error);
+    const data = await fetchReview(reviewId);
 
     const session = {
       id: `session_${Date.now()}`,
@@ -233,6 +268,7 @@ async function loadFromBackend(reviewId) {
       createdAt: data.createdAt || new Date().toISOString(),
       tabs: data.tabs || [],
       suggestions: data.suggestions || [],
+      source: data.source,
       status: data.status,
     };
 
@@ -246,11 +282,7 @@ async function loadFromBackend(reviewId) {
 
 async function selectSession(session) {
   activeSession = session;
-  selectedIds = new Set(
-    (session.suggestions || [])
-      .filter((s) => s.status === "pending_review")
-      .map((s) => s.id),
-  );
+  selectedIds = defaultSelection(session.suggestions);
 
   renderSession();
   renderHistory();
@@ -330,7 +362,7 @@ function renderSession() {
     restoreBtn.textContent = "Open";
     restoreBtn.title = "Open tab";
     restoreBtn.addEventListener("click", () => {
-      chrome.tabs.create({ url: tab.url });
+      browserApi.tabs.create({ url: tab.url });
     });
     actions.appendChild(restoreBtn);
 
@@ -354,9 +386,124 @@ function renderSession() {
   updateSelectedCount();
 }
 
+function renderTriageSource() {
+  const source = activeSession?.source;
+  const hasSuggestions = (activeSession?.suggestions ?? []).length > 0;
+
+  if (!source || !hasSuggestions) {
+    triageSourceEl.hidden = true;
+    return;
+  }
+
+  triageSourceEl.hidden = false;
+  triageSourceEl.dataset.source = source;
+  triageSourceEl.textContent =
+    source === "model"
+      ? "Categorized by the Tabme model."
+      : "Categorized by keyword fallback — the model was unavailable.";
+}
+
+function renderSuggestionRow(suggestion) {
+  const item = document.createElement("div");
+  item.className = "suggestion-item";
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.id = `dash_sug_${suggestion.id}`;
+  checkbox.checked = selectedIds.has(suggestion.id);
+  checkbox.disabled =
+    activeSession.status === "executed" || suggestion.status !== "pending_review";
+
+  checkbox.addEventListener("change", (event) => {
+    if (event.target.checked) {
+      if (selectedIds.size >= MAX_APPROVALS_PER_EXECUTION) {
+        event.target.checked = false;
+        flashApprovalLimit();
+        return;
+      }
+      selectedIds.add(suggestion.id);
+    } else {
+      selectedIds.delete(suggestion.id);
+    }
+    updateSelectedCount();
+  });
+
+  const body = document.createElement("div");
+  body.className = "suggestion-body";
+
+  const title = document.createElement("label");
+  title.className = "suggestion-title";
+  title.setAttribute("for", checkbox.id);
+  title.textContent = suggestion.title;
+  body.appendChild(title);
+
+  if (suggestion.description) {
+    const desc = document.createElement("span");
+    desc.className = "suggestion-meta";
+    desc.textContent = suggestion.description;
+    body.appendChild(desc);
+  }
+
+  const meta = document.createElement("span");
+  meta.className = "suggestion-meta suggestion-routing";
+
+  const surface = surfaceOf(suggestion);
+  const destination = document.createElement("span");
+  destination.className = "destination-badge";
+  destination.dataset.surface = surface;
+  destination.textContent = surfaceLabel(surface);
+  destination.title = `Approving writes this as an ${surfaceLabel(surface)}.`;
+  meta.appendChild(destination);
+
+  const facts = [typeLabel(suggestion.type)];
+  if (typeof suggestion.confidence === "number") {
+    facts.push(`${Math.round(suggestion.confidence * 100)}% confidence`);
+  }
+  if (suggestion.dueDate) facts.push(`due ${suggestion.dueDate}`);
+
+  const factsEl = document.createElement("span");
+  factsEl.textContent = facts.join(" · ");
+  meta.appendChild(factsEl);
+
+  if (suggestion.status !== "pending_review") {
+    const badge = document.createElement("span");
+    badge.className = `status-badge ${suggestion.status}`;
+    badge.textContent = suggestion.status.replaceAll("_", " ");
+    meta.appendChild(badge);
+  }
+  body.appendChild(meta);
+
+  if (suggestion.resultUrl) {
+    const link = document.createElement("a");
+    link.href = suggestion.resultUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.className = "suggestion-meta";
+    link.textContent = `Open ${surfaceLabel(surface)} in Ambiguous ↗`;
+    body.appendChild(link);
+  } else if (suggestion.actionId) {
+    const ref = document.createElement("code");
+    ref.className = "suggestion-meta";
+    ref.textContent = suggestion.actionId;
+    body.appendChild(ref);
+  }
+
+  if (suggestion.error) {
+    const err = document.createElement("span");
+    err.className = "suggestion-meta alert";
+    err.textContent = suggestion.error;
+    body.appendChild(err);
+  }
+
+  item.appendChild(checkbox);
+  item.appendChild(body);
+  return item;
+}
+
 function renderSuggestions() {
   if (!activeSession) return;
   suggestionsList.innerHTML = "";
+  renderTriageSource();
 
   if (activeSession.status === "analyzing") {
     const stateEl = document.createElement("div");
@@ -372,95 +519,121 @@ function renderSuggestions() {
     return;
   }
 
+  if (activeSession.error) {
+    const failure = document.createElement("div");
+    failure.className = "triage-error";
+
+    const message = document.createElement("p");
+    message.className = "meta alert";
+    message.textContent = activeSession.error;
+    failure.appendChild(message);
+
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn btn-sm";
+    retry.textContent = "Try again";
+    retry.addEventListener("click", () => handleRegenerateSuggestions());
+    failure.appendChild(retry);
+
+    suggestionsList.appendChild(failure);
+    return;
+  }
+
   if (!activeSession.suggestions || activeSession.suggestions.length === 0) {
     const p = document.createElement("p");
     p.className = "empty-state";
-    p.textContent = "No suggestions generated for this tab group. Click 'Re-generate' to create new suggestions.";
+    p.textContent =
+      "No actions proposed for this tab group. Re-generate to ask the agent again.";
     suggestionsList.appendChild(p);
     return;
   }
 
-  activeSession.suggestions.forEach((suggestion) => {
-    const item = document.createElement("div");
-    item.className = "suggestion-item";
+  for (const { category, items } of groupByCategory(activeSession.suggestions)) {
+    const group = document.createElement("section");
+    group.className = "category-group";
 
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.id = `dash_sug_${suggestion.id}`;
-    checkbox.checked = selectedIds.has(suggestion.id);
-    checkbox.disabled = activeSession.status === "executed" || suggestion.status !== "pending_review";
+    const heading = document.createElement("h3");
+    heading.className = "category-heading";
+    heading.textContent = categoryLabel(category);
 
-    checkbox.addEventListener("change", (e) => {
-      if (e.target.checked) selectedIds.add(suggestion.id);
-      else selectedIds.delete(suggestion.id);
-      updateSelectedCount();
-    });
+    const count = document.createElement("span");
+    count.className = "category-count";
+    count.textContent = String(items.length);
+    heading.appendChild(count);
+    group.appendChild(heading);
 
-    const body = document.createElement("div");
-    body.className = "suggestion-body";
-
-    const title = document.createElement("span");
-    title.className = "suggestion-title";
-    title.textContent = suggestion.title;
-    body.appendChild(title);
-
-    if (suggestion.description) {
-      const desc = document.createElement("span");
-      desc.className = "suggestion-meta";
-      desc.textContent = suggestion.description;
-      body.appendChild(desc);
+    for (const suggestion of items) {
+      group.appendChild(renderSuggestionRow(suggestion));
     }
-
-    const meta = document.createElement("span");
-    meta.className = "suggestion-meta";
-    const typeClean = suggestion.type.replaceAll("_", " ");
-    const conf = suggestion.confidence ? ` · ${Math.round(suggestion.confidence * 100)}% conf` : "";
-    const due = suggestion.dueDate ? ` · Due ${suggestion.dueDate}` : "";
-    meta.textContent = `${typeClean}${conf}${due}`;
-
-    if (suggestion.status !== "pending_review") {
-      const badge = document.createElement("span");
-      badge.className = `status-badge ${suggestion.status}`;
-      badge.textContent = suggestion.status;
-      meta.appendChild(badge);
-    }
-    body.appendChild(meta);
-
-    if (suggestion.resultUrl) {
-      const link = document.createElement("a");
-      link.href = suggestion.resultUrl;
-      link.target = "_blank";
-      link.className = "suggestion-meta";
-      link.textContent = "Open workplace record ↗";
-      body.appendChild(link);
-    }
-
-    if (suggestion.error) {
-      const err = document.createElement("span");
-      err.className = "meta alert";
-      err.textContent = suggestion.error;
-      body.appendChild(err);
-    }
-
-    item.appendChild(checkbox);
-    item.appendChild(body);
-    suggestionsList.appendChild(item);
-  });
+    suggestionsList.appendChild(group);
+  }
 }
 
 function updateSelectedCount() {
   selectedCountEl.textContent = String(selectedIds.size);
   approveBtn.disabled =
     executing || selectedIds.size === 0 || activeSession?.status === "executed";
+  renderApprovalHint();
+}
+
+/** Pre-checks everything still awaiting review, within the per-run approval cap. */
+function defaultSelection(suggestions) {
+  return new Set(
+    (suggestions ?? [])
+      .filter((suggestion) => suggestion.status === "pending_review")
+      .slice(0, MAX_APPROVALS_PER_EXECUTION)
+      .map((suggestion) => suggestion.id),
+  );
+}
+
+function renderApprovalHint() {
+  if (selectedIds.size > 0 && !health.workplace) {
+    approvalHintEl.hidden = false;
+    approvalHintEl.dataset.tone = "warn";
+    approvalHintEl.textContent = health.online
+      ? "Ambiguous is not configured, so these approvals will fail. Set AMBIGUOUS_API_KEY in the root .env."
+      : "The Tabme backend is offline, so approvals cannot be written.";
+    return;
+  }
+
+  if (selectedIds.size === 0) {
+    approvalHintEl.hidden = true;
+    return;
+  }
+
+  const pending = (activeSession?.suggestions ?? []).filter(
+    (suggestion) => suggestion.status === "pending_review",
+  );
+  const surfaces = summarizeSurfaces(
+    pending
+      .filter((suggestion) => selectedIds.has(suggestion.id))
+      .map((suggestion) => ({ surface: surfaceOf(suggestion) })),
+  );
+  const dismissed = pending.length - selectedIds.size;
+
+  approvalHintEl.hidden = false;
+  approvalHintEl.dataset.tone = "info";
+  approvalHintEl.textContent =
+    dismissed > 0
+      ? `Approving writes ${surfaces}. The ${dismissed} unselected action${dismissed === 1 ? "" : "s"} will be dismissed.`
+      : `Approving writes ${surfaces}.`;
+}
+
+function flashApprovalLimit() {
+  approvalHintEl.hidden = false;
+  approvalHintEl.dataset.tone = "warn";
+  approvalHintEl.textContent = `Approve up to ${MAX_APPROVALS_PER_EXECUTION} actions at a time. Run a second round for the rest.`;
 }
 
 function handleToggleSelectAll() {
   if (!activeSession) return;
   const pending = activeSession.suggestions.filter((s) => s.status === "pending_review");
-  if (selectedIds.size === pending.length) {
+  if (selectedIds.size > 0) {
     selectedIds.clear();
   } else {
-    selectedIds = new Set(pending.map((s) => s.id));
+    selectedIds = new Set(
+      pending.slice(0, MAX_APPROVALS_PER_EXECUTION).map((s) => s.id),
+    );
   }
   updateSelectedCount();
   renderSuggestions();
@@ -469,38 +642,40 @@ function handleToggleSelectAll() {
 async function handleRestoreAll() {
   if (!activeSession || !activeSession.tabs.length) return;
   for (const tab of activeSession.tabs) {
-    if (tab.url && !tab.url.startsWith("chrome-extension://")) {
-      await chrome.tabs.create({ url: tab.url, active: false });
+    if (tab.url && !isOwnExtensionUrl(tab.url)) {
+      await browserApi.tabs.create({ url: tab.url, active: false });
     }
   }
 }
 
+function isOwnExtensionUrl(url) {
+  return url.startsWith("chrome-extension://") || url.startsWith("moz-extension://");
+}
+
 async function handleGroupInChrome() {
   if (!activeSession || !activeSession.tabs.length) return;
-  const urlsToOpen = activeSession.tabs.filter(
-    (t) => t.url && !t.url.startsWith("chrome-extension://")
-  );
+  const urlsToOpen = activeSession.tabs.filter((t) => t.url && !isOwnExtensionUrl(t.url));
   if (urlsToOpen.length === 0) return;
 
   try {
     const createdTabs = [];
     for (const tab of urlsToOpen) {
-      const created = await chrome.tabs.create({ url: tab.url, active: false });
+      const created = await browserApi.tabs.create({ url: tab.url, active: false });
       createdTabs.push(created);
     }
 
     const newTabIds = createdTabs.map((t) => t.id).filter((id) => typeof id === "number");
-    if (chrome.tabs?.group && newTabIds.length > 0) {
-      const groupId = await chrome.tabs.group({ tabIds: newTabIds });
-      if (chrome.tabGroups?.update) {
-        await chrome.tabGroups.update(groupId, {
+    if (browserApi.tabs?.group && newTabIds.length > 0) {
+      const groupId = await browserApi.tabs.group({ tabIds: newTabIds });
+      if (browserApi.tabGroups?.update) {
+        await browserApi.tabGroups.update(groupId, {
           title: formatGroupTitle(activeSession.tabs),
           color: "cyan",
         });
       }
     }
   } catch (err) {
-    console.warn("Could not group tabs in Chrome:", err);
+    console.warn("Could not group tabs:", err);
   }
 }
 
@@ -524,6 +699,7 @@ async function handleRegenerateSuggestions() {
 
   // Reset status to analyzing and clear execution banner
   activeSession.status = "analyzing";
+  activeSession.error = null;
   if (executionBanner) {
     executionBanner.hidden = true;
     executionBanner.textContent = "";
@@ -531,36 +707,24 @@ async function handleRegenerateSuggestions() {
   renderSuggestions();
 
   try {
-    const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabs: activeSession.tabs }),
-    });
-    const data = await response.json();
-    if (data.reviewId) {
-      activeSession.reviewId = data.reviewId;
-      const res = await fetch(`${API_BASE}/api/suggestions/${data.reviewId}`);
-      const reviewData = await res.json();
-      if (reviewData.success && Array.isArray(reviewData.suggestions)) {
-        activeSession.suggestions = reviewData.suggestions;
-        activeSession.status = "pending";
-        selectedIds = new Set(
-          activeSession.suggestions
-            .filter((s) => s.status === "pending_review")
-            .map((s) => s.id),
-        );
-        renderSuggestions();
-        updateSelectedCount();
-        await saveStoredSessions();
-      }
-    }
+    await refreshHealth();
+    const { reviewId } = await generateSuggestions(activeSession.tabs);
+    const review = await fetchReview(reviewId);
+
+    activeSession.reviewId = reviewId;
+    activeSession.suggestions = review.suggestions ?? [];
+    activeSession.source = review.source;
+    activeSession.status = review.status ?? "pending";
+    selectedIds = defaultSelection(activeSession.suggestions);
+    await saveStoredSessions();
   } catch (err) {
     console.error("Re-generate failed:", err);
     activeSession.status = "pending";
-    renderSuggestions();
+    activeSession.error = describeError(err);
   } finally {
     regenerateBtn.disabled = false;
     regenerateBtn.textContent = originalText;
+    renderSuggestions();
     updateSelectedCount();
   }
 }
@@ -568,60 +732,86 @@ async function handleRegenerateSuggestions() {
 async function handleApprove() {
   if (!activeSession || selectedIds.size === 0) return;
 
+  if (!activeSession.reviewId) {
+    setExecutionBanner(
+      "This tab group has no review yet. Re-generate suggestions before approving.",
+      "error",
+    );
+    return;
+  }
+
   executing = true;
   approveBtn.disabled = true;
-  executionBanner.hidden = false;
-  executionBanner.className = "result-banner";
-  executionBanner.textContent = "Executing approved suggestions…";
+  setExecutionBanner("Writing approved actions to Ambiguous…");
 
   try {
     const approvedList = Array.from(selectedIds);
-    const response = await fetch(`${API_BASE}/api/execute-suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reviewId: activeSession.reviewId,
-        approvedIds: approvedList,
-      }),
-    });
+    const data = await executeSuggestions(activeSession.reviewId, approvedList);
+    const results = data.results ?? [];
 
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || "Execution failed.");
-    }
+    const written = results.filter(
+      (result) => result.status === "completed" || result.status === "skipped",
+    );
+    const failures = results.filter((result) => result.status === "failed");
 
-    const completed = (data.results ?? []).filter((r) => r.status === "completed").length;
-    const failed = (data.results ?? []).filter((r) => r.status === "failed").length;
-
-    executionBanner.className = failed ? "result-banner error" : "result-banner success";
-    executionBanner.textContent = failed
-      ? `Completed ${completed} actions. ${failed} failed.`
-      : `Completed ${completed} actions successfully in workspace.`;
+    setExecutionBanner(
+      describeExecution(written, failures),
+      failures.length ? "error" : "success",
+      written.length > 0,
+    );
 
     // Close triaged tabs in browser if option selected
-    if (closeTabsCheckbox.checked && chrome.tabs?.remove) {
+    if (closeTabsCheckbox.checked && browserApi.tabs?.remove) {
       await closeTriagedBrowserTabs(approvedList);
     }
 
-    // Refresh review state from backend
-    if (activeSession.reviewId) {
-      const refreshRes = await fetch(`${API_BASE}/api/suggestions/${activeSession.reviewId}`);
-      const refreshData = await refreshRes.json();
-      if (refreshRes.ok && refreshData.success) {
-        activeSession.suggestions = refreshData.suggestions;
-        activeSession.status = refreshData.status;
-        renderSuggestions();
-        await saveStoredSessions();
-      }
-    }
+    // Refresh review state from backend so each row shows its Ambiguous record
+    const refreshed = await fetchReview(activeSession.reviewId);
+    activeSession.suggestions = refreshed.suggestions ?? activeSession.suggestions;
+    activeSession.status = refreshed.status;
+    selectedIds.clear();
+    renderSuggestions();
+    await saveStoredSessions();
   } catch (err) {
     console.error(err);
-    executionBanner.className = "result-banner error";
-    executionBanner.textContent = err instanceof Error ? err.message : "Execution failed.";
+    setExecutionBanner(describeError(err), "error");
   } finally {
     executing = false;
     updateSelectedCount();
   }
+}
+
+/**
+ * Ambiguous doesn't return a web URL for every record kind (see the actionId
+ * fallback in renderSuggestionRow), so the reliable way to see what just got
+ * created is the workspace itself, not a per-record deep link.
+ */
+function setExecutionBanner(text, tone = "", showWorkspaceLink = false) {
+  executionBanner.hidden = false;
+  executionBanner.className = tone ? `result-banner ${tone}` : "result-banner";
+  executionBanner.textContent = "";
+  executionBanner.appendChild(document.createTextNode(text));
+  if (showWorkspaceLink) {
+    executionBanner.appendChild(document.createTextNode(" "));
+    const link = document.createElement("a");
+    link.href = "https://app.ambiguous.ai";
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open Ambiguous workspace ↗";
+    executionBanner.appendChild(link);
+  }
+}
+
+function describeExecution(written, failures) {
+  const parts = [];
+  if (written.length) parts.push(`Created ${summarizeSurfaces(written)} in Ambiguous.`);
+  if (failures.length) {
+    const reason = failures[0].error;
+    parts.push(
+      `${failures.length} action${failures.length === 1 ? "" : "s"} could not be written${reason ? `: ${reason}` : "."}`,
+    );
+  }
+  return parts.join(" ") || "Nothing was written.";
 }
 
 async function closeTriagedBrowserTabs(approvedIds) {
@@ -635,14 +825,14 @@ async function closeTriagedBrowserTabs(approvedIds) {
       if (Array.isArray(sug.data?.urls)) sug.data.urls.forEach((u) => urlsToClose.add(u));
     }
 
-    const chromeTabs = await chrome.tabs.query({});
-    const tabsToRemove = chromeTabs
+    const openTabs = await browserApi.tabs.query({});
+    const tabsToRemove = openTabs
       .filter((t) => urlsToClose.has(t.url) && !t.url.includes("dashboard.html"))
       .map((t) => t.id)
       .filter((id) => typeof id === "number");
 
     if (tabsToRemove.length > 0) {
-      await chrome.tabs.remove(tabsToRemove);
+      await browserApi.tabs.remove(tabsToRemove);
     }
   } catch (e) {
     console.warn("Could not close browser tabs:", e);
@@ -655,26 +845,16 @@ async function sendAssistantMessage(messageText) {
   const thinkingBubble = appendChatBubble("Thinking…", "assistant");
 
   try {
-    const response = await fetch(`${API_BASE}/api/assistant`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        reviewId: activeSession?.reviewId,
-        tabs: activeSession?.tabs,
-        suggestions: activeSession?.suggestions,
-        message: messageText,
-      }),
+    const data = await askAssistant({
+      reviewId: activeSession?.reviewId,
+      tabs: activeSession?.tabs,
+      suggestions: activeSession?.suggestions,
+      message: messageText,
     });
-
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || "Assistant unavailable.");
-    }
     thinkingBubble.textContent = data.reply;
   } catch (err) {
     console.error("Chat error:", err);
-    thinkingBubble.textContent =
-      "Could not reach the Tabme assistant. Make sure http://127.0.0.1:3100 is running.";
+    thinkingBubble.textContent = describeError(err);
   }
 }
 

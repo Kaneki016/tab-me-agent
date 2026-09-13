@@ -27,6 +27,15 @@ export type ExecutionMode = "real" | "mock";
 
 export type SuggestionSource = "model" | "heuristic";
 
+/** The Ambiguous record a suggestion writes to once approved. */
+export type WorkplaceSurface =
+  | "task"
+  | "doc"
+  | "sheet"
+  | "contact"
+  | "email draft"
+  | "drive upload";
+
 export interface Tab {
   id: number;
   url: string;
@@ -39,6 +48,7 @@ export interface Suggestion {
   id: string;
   type: SuggestionType;
   category: TaskCategory;
+  surface: WorkplaceSurface;
   status: SuggestionStatus;
   data: Record<string, unknown>;
   editable: boolean;
@@ -70,4 +80,5 @@ export interface ExecutionResult {
   resultUrl?: string | null;
   mode?: ExecutionMode;
   modeReason?: string;
+  surface?: WorkplaceSurface;
 }

@@ -1,6 +1,13 @@
-export type WorkplaceTask = {
+export type WorkplaceRecordKind =
+  | "task"
+  | "document"
+  | "sheet"
+  | "contact"
+  | "draft_email";
+
+export type WorkplaceRecord = {
+  kind: WorkplaceRecordKind;
   id: string;
   title: string;
-  description: string;
   url: string | null;
 };

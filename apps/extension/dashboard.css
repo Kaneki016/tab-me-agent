@@ -106,6 +106,50 @@ code {
   font-size: 0.85rem;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Backend + Ambiguous reachability */
+.connection-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.connection-strip[data-tone="warn"] {
+  color: var(--brass-deep);
+}
+
+.connection-strip[data-tone="error"] {
+  color: var(--danger);
+}
+
+.connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line);
+  flex-shrink: 0;
+}
+
+.connection-dot[data-tone="ok"] {
+  background: var(--ok);
+}
+
+.connection-dot[data-tone="warn"] {
+  background: var(--brass);
+}
+
+.connection-dot[data-tone="error"] {
+  background: var(--danger);
+}
+
 /* Layout */
 .shell {
   max-width: 1200px;
@@ -354,6 +398,63 @@ code {
   flex-direction: column;
 }
 
+.source-line {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.source-line[data-source="heuristic"] {
+  color: var(--brass-deep);
+}
+
+/* Category groups mirror the agent's triage categories */
+.category-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.category-group + .category-group {
+  margin-top: 28px;
+}
+
+.category-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.8rem;
+  font-family: "Figtree", sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.category-count {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+}
+
+.triage-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  margin: 12px 0;
+  background: var(--danger-soft);
+  border: 1px solid #f1c7c2;
+  border-radius: 4px;
+}
+
+.alert {
+  color: var(--danger);
+}
+
 .analyzing-state {
   display: flex;
   align-items: center;
@@ -427,11 +528,48 @@ code {
 .suggestion-title {
   font-size: 1.05rem;
   font-weight: 600;
+  cursor: pointer;
 }
 
 .suggestion-meta {
   color: var(--ink-soft);
   font-size: 0.88rem;
+}
+
+.suggestion-routing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Names the Ambiguous record this action will create */
+.destination-badge {
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--moss-soft);
+  color: var(--moss);
+  border: 1px solid #c3d3c2;
+  white-space: nowrap;
+}
+
+.destination-badge[data-surface="sheet"],
+.destination-badge[data-surface="contact"],
+.destination-badge[data-surface="email draft"] {
+  background: #f3e3d3;
+  color: var(--brass-deep);
+  border-color: #e0c6ab;
+}
+
+/* Unsupported destination: readable, but never looks approvable */
+.destination-badge[data-surface="drive upload"] {
+  background: #ece6dc;
+  color: var(--ink-soft);
+  border-color: var(--line);
 }
 
 .status-badge {
@@ -480,6 +618,16 @@ code {
 
 .checkbox-label input[type="checkbox"] {
   accent-color: var(--brass);
+}
+
+.approval-hint {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.approval-hint[data-tone="warn"] {
+  color: var(--brass-deep);
 }
 
 .result-banner {

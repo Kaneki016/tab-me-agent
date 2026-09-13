@@ -10,6 +10,10 @@ export function isAllowedOrigin(origin: string | null): boolean {
   if (!origin) return false;
   if (LOOPBACK_ORIGINS.has(origin)) return true;
   if (origin.startsWith("chrome-extension://")) return true;
+  // Firefox extension origin. Its UUID is randomized per profile even with a
+  // fixed browser_specific_settings.gecko.id, so this is matched by prefix
+  // the same way chrome-extension:// is above.
+  if (origin.startsWith("moz-extension://")) return true;
   const extra = process.env.CHROME_EXTENSION_ORIGIN?.trim();
   if (extra && origin === extra) return true;
   return false;
