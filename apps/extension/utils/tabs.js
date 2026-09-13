@@ -6,6 +6,7 @@ export async function captureTabs() {
       id: tab.id,
       url: tab.url || "",
       title: tab.title || "",
+      favIconUrl: tab.favIconUrl || "",
       status: "captured",
     };
 
@@ -23,14 +24,19 @@ export async function captureTabs() {
   });
 
   const scrapable = tabs.filter((tab) => tab.status === "captured").slice(0, 3);
-  for (const tab of scrapable) {
-    try {
-      tab.content = await scrapeTab(tab.id);
-      tab.status = "scraped";
-    } catch {
-      tab.status = "captured";
-    }
-  }
+  await Promise.all(
+    scrapable.map(async (tab) => {
+      try {
+        tab.content = await Promise.race([
+          scrapeTab(tab.id),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 400)),
+        ]);
+        tab.status = "scraped";
+      } catch {
+        tab.status = "captured";
+      }
+    })
+  );
 
   return tabs;
 }

@@ -317,11 +317,25 @@ code {
 /* Triage Card */
 .triage-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
   margin-bottom: 16px;
+}
+
+.triage-title-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.triage-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .triage-title {
@@ -338,6 +352,50 @@ code {
 .suggestions-list {
   display: flex;
   flex-direction: column;
+}
+
+.analyzing-state {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 18px;
+  background: #fdfaf4;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  margin: 10px 0;
+}
+
+.analyzing-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid #d4c8b4;
+  border-top-color: var(--brass);
+  border-radius: 50%;
+  animation: dashSpin 0.85s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes dashSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.analyzing-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.analyzing-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.analyzing-desc {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
 }
 
 .suggestion-item {

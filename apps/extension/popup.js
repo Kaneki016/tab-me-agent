@@ -1,6 +1,5 @@
 import { captureTabs } from "./utils/tabs.js";
-
-const API_BASE = "http://127.0.0.1:3100";
+import { formatGroupTitle } from "./utils/group-title.js";
 
 const groupAndOpenBtn = document.getElementById("groupAndOpenBtn");
 const openDashboardBtn = document.getElementById("openDashboardBtn");
@@ -12,74 +11,48 @@ function setStatus(text, type = "") {
   statusEl.className = type;
 }
 
-// 1. One-Click: Group Tabs & Open Tabme Dashboard
+// 1. One-Click: Stash Tabs, Close Them, & Open Tabme Dashboard Instantly
 groupAndOpenBtn.addEventListener("click", async () => {
-  setStatus("Grouping tabs…");
+  setStatus("Stashing tabs…");
   groupAndOpenBtn.disabled = true;
 
   try {
+    const currentWindow = await chrome.windows.getCurrent();
     const tabs = await captureTabs();
     if (!tabs.length) {
       throw new Error("No tabs found in this window.");
     }
 
-    // Group tabs in Chrome
-    const rawTabIds = tabs.map((t) => t.id).filter((id) => typeof id === "number");
-    if (chrome.tabs?.group && rawTabIds.length > 0) {
-      try {
-        const groupId = await chrome.tabs.group({ tabIds: rawTabIds });
-        if (chrome.tabGroups?.update) {
-          const timeStr = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-          await chrome.tabGroups.update(groupId, {
-            title: `Tabme: ${timeStr}`,
-            color: "orange",
-          });
-        }
-      } catch (groupErr) {
-        console.warn("Tab grouping error:", groupErr);
-      }
-    }
+    // Filter out internal and extension tabs so we only stash user tabs
+    const isExtensionUrl = (url) =>
+      !url ||
+      url.startsWith("chrome-extension://") ||
+      url.startsWith("chrome://") ||
+      url.startsWith("edge://") ||
+      url.startsWith("about:");
 
-    // Call backend for suggestions
-    let reviewId = null;
-    let suggestions = [];
-    try {
-      const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tabs }),
-      });
-      const data = await response.json();
-      if (data.reviewId) {
-        reviewId = data.reviewId;
-        const revRes = await fetch(`${API_BASE}/api/suggestions/${reviewId}`);
-        const revData = await revRes.json();
-        if (revData.success && Array.isArray(revData.suggestions)) {
-          suggestions = revData.suggestions;
-        }
-      }
-    } catch (apiErr) {
-      console.warn("Backend suggestion error:", apiErr);
-    }
+    const stashedTabs = tabs.filter((t) => !isExtensionUrl(t.url));
+    const tabsToSave = stashedTabs.length > 0 ? stashedTabs : tabs;
+    const tabIdsToClose = stashedTabs.map((t) => t.id).filter((id) => typeof id === "number");
 
-    // Save session to chrome.storage.local
+    // Intelligent title
+    const groupTitle = formatGroupTitle(tabsToSave);
+    const now = new Date();
+
+    const newSession = {
+      id: `session_${Date.now()}`,
+      reviewId: null,
+      title: groupTitle,
+      createdAt: now.toISOString(),
+      tabs: tabsToSave,
+      suggestions: [],
+      status: "analyzing",
+    };
+
+    // Save session immediately to local storage
     if (chrome.storage?.local) {
       const stored = await chrome.storage.local.get(["savedSessions"]);
       const savedSessions = Array.isArray(stored.savedSessions) ? stored.savedSessions : [];
-      const now = new Date();
-      const dateStr = now.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      const timeStr = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-
-      const newSession = {
-        id: `session_${Date.now()}`,
-        reviewId,
-        title: `Tabme — ${dateStr}, ${timeStr}`,
-        createdAt: now.toISOString(),
-        tabs,
-        suggestions,
-        status: "pending",
-      };
-
       savedSessions.unshift(newSession);
       await chrome.storage.local.set({
         savedSessions,
@@ -87,13 +60,27 @@ groupAndOpenBtn.addEventListener("click", async () => {
       });
     }
 
-    // Open Dashboard page
-    const dashboardUrl = chrome.runtime.getURL("dashboard.html");
-    await chrome.tabs.create({ url: dashboardUrl });
+    // Open Dashboard page in current window FIRST
+    const dashboardUrl = chrome.runtime.getURL(`dashboard.html?sessionId=${newSession.id}`);
+    await chrome.tabs.create({
+      windowId: currentWindow.id,
+      url: dashboardUrl,
+      active: true,
+    });
+
+    // Close all stashed tabs in the browser (they will only restore when user asks)
+    if (tabIdsToClose.length > 0 && chrome.tabs?.remove) {
+      try {
+        await chrome.tabs.remove(tabIdsToClose);
+      } catch (removeErr) {
+        console.warn("Could not close tabs:", removeErr);
+      }
+    }
+
     window.close();
   } catch (error) {
     console.error(error);
-    setStatus(error instanceof Error ? error.message : "Failed to group tabs.", "error");
+    setStatus(error instanceof Error ? error.message : "Failed to stash tabs.", "error");
     groupAndOpenBtn.disabled = false;
   }
 });

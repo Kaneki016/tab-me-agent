@@ -1,4 +1,5 @@
 import { captureTabs } from "./utils/tabs.js";
+import { formatGroupTitle } from "./utils/group-title.js";
 
 const API_BASE = "http://127.0.0.1:3100";
 
@@ -329,8 +330,8 @@ async function groupApprovedTabs(approvedSuggestionIds) {
       const groupId = await chrome.tabs.group({ tabIds: tabIdsToGroup });
       if (chrome.tabGroups?.update) {
         await chrome.tabGroups.update(groupId, {
-          title: "Tabme: Triaged",
-          color: "orange",
+          title: formatGroupTitle(session.tabs),
+          color: "cyan",
         });
       }
     }
@@ -351,6 +352,8 @@ async function sendChatMessage(promptText) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         reviewId: session?.reviewId,
+        tabs: session?.tabs,
+        suggestions: session?.suggestions,
         message: promptText,
       }),
     });

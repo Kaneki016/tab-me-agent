@@ -1,4 +1,5 @@
 import { captureTabs } from "./utils/tabs.js";
+import { formatGroupTitle } from "./utils/group-title.js";
 
 const API_BASE = "http://127.0.0.1:3100";
 
@@ -7,6 +8,7 @@ let activeSession = null;
 let savedSessions = [];
 let selectedIds = new Set();
 let executing = false;
+const analyzingSessionIds = new Set();
 
 // DOM Elements
 const sessionTitleEl = document.getElementById("sessionTitle");
@@ -111,74 +113,110 @@ async function saveStoredSessions() {
 
 async function captureAndConsolidate() {
   consolidateBtn.disabled = true;
-  sessionTitleEl.textContent = "Scanning active window…";
-  sessionMetaEl.textContent = "Gathering tabs and grouping…";
 
   try {
+    const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabs = await captureTabs();
     if (!tabs.length) {
       throw new Error("No tabs found to capture in this window.");
     }
 
-    // Group the tabs in Chrome
+    const isExtensionUrl = (url) =>
+      !url ||
+      url.startsWith("chrome-extension://") ||
+      url.startsWith("chrome://") ||
+      url.startsWith("edge://") ||
+      url.startsWith("about:");
+
+    // Exclude the current dashboard tab and other extension tabs
+    const stashedTabs = tabs.filter(
+      (t) => t.id !== currentTab?.id && !isExtensionUrl(t.url)
+    );
+
+    if (stashedTabs.length === 0) {
+      alert("No external browser tabs found to group in this window.");
+      return;
+    }
+
+    const tabIdsToClose = stashedTabs.map((t) => t.id).filter((id) => typeof id === "number");
+    const sessionTitle = formatGroupTitle(stashedTabs);
     const now = new Date();
-    const dateStr = now.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    const timeStr = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-    const sessionTitle = `Tabme — ${dateStr}, ${timeStr}`;
-
-    const rawTabIds = tabs.map((t) => t.id).filter((id) => typeof id === "number");
-    if (chrome.tabs?.group && rawTabIds.length > 0) {
-      try {
-        const groupId = await chrome.tabs.group({ tabIds: rawTabIds });
-        if (chrome.tabGroups?.update) {
-          await chrome.tabGroups.update(groupId, {
-            title: `Tabme: ${timeStr}`,
-            color: "orange",
-          });
-        }
-      } catch (groupErr) {
-        console.warn("Could not group tabs in browser:", groupErr);
-      }
-    }
-
-    // Send to Tabme backend for triage suggestions
-    const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabs }),
-    });
-
-    const resData = await response.json();
-    const reviewId = resData.reviewId;
-
-    let suggestions = [];
-    if (reviewId) {
-      const fetchReview = await fetch(`${API_BASE}/api/suggestions/${reviewId}`);
-      const reviewData = await fetchReview.json();
-      if (reviewData.success && Array.isArray(reviewData.suggestions)) {
-        suggestions = reviewData.suggestions;
-      }
-    }
 
     const newSession = {
       id: `session_${Date.now()}`,
-      reviewId,
+      reviewId: null,
       title: sessionTitle,
       createdAt: now.toISOString(),
-      tabs,
-      suggestions,
-      status: "pending",
+      tabs: stashedTabs,
+      suggestions: [],
+      status: "analyzing",
     };
 
     savedSessions.unshift(newSession);
     await selectSession(newSession);
     await saveStoredSessions();
+
+    // Close the captured tabs so only dashboard remains open
+    if (tabIdsToClose.length > 0 && chrome.tabs?.remove) {
+      try {
+        await chrome.tabs.remove(tabIdsToClose);
+      } catch (removeErr) {
+        console.warn("Could not close captured tabs:", removeErr);
+      }
+    }
   } catch (err) {
     console.error(err);
-    sessionTitleEl.textContent = "Capture failed";
-    sessionMetaEl.textContent = err instanceof Error ? err.message : "Unable to capture tabs.";
+    alert(err instanceof Error ? err.message : "Unable to capture tabs.");
   } finally {
     consolidateBtn.disabled = false;
+  }
+}
+
+async function triggerTabAnalysis(session) {
+  if (!session || analyzingSessionIds.has(session.id)) return;
+  if (session.suggestions && session.suggestions.length > 0) return;
+  if (session.status === "executed") return;
+
+  analyzingSessionIds.add(session.id);
+  session.status = "analyzing";
+  if (activeSession?.id === session.id) {
+    renderSuggestions();
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tabs: session.tabs }),
+    });
+
+    const resData = await response.json();
+    const reviewId = resData.reviewId;
+
+    if (reviewId) {
+      session.reviewId = reviewId;
+      const fetchReview = await fetch(`${API_BASE}/api/suggestions/${reviewId}`);
+      const reviewData = await fetchReview.json();
+      if (reviewData.success && Array.isArray(reviewData.suggestions)) {
+        session.suggestions = reviewData.suggestions;
+        session.status = "pending";
+      }
+    }
+  } catch (err) {
+    console.warn("Background tab triage failed:", err);
+    session.status = "pending";
+  } finally {
+    analyzingSessionIds.delete(session.id);
+    if (activeSession?.id === session.id) {
+      selectedIds = new Set(
+        (activeSession.suggestions || [])
+          .filter((s) => s.status === "pending_review")
+          .map((s) => s.id)
+      );
+      renderSuggestions();
+      updateSelectedCount();
+    }
+    await saveStoredSessions();
   }
 }
 
@@ -191,7 +229,7 @@ async function loadFromBackend(reviewId) {
     const session = {
       id: `session_${Date.now()}`,
       reviewId: data.reviewId,
-      title: `Tabme Review ${data.reviewId.slice(0, 10)}`,
+      title: formatGroupTitle(data.tabs || []),
       createdAt: data.createdAt || new Date().toISOString(),
       tabs: data.tabs || [],
       suggestions: data.suggestions || [],
@@ -216,6 +254,14 @@ async function selectSession(session) {
 
   renderSession();
   renderHistory();
+
+  // If this session has no suggestions yet, trigger background analysis!
+  if (
+    (!session.suggestions || session.suggestions.length === 0) &&
+    session.status !== "executed"
+  ) {
+    triggerTabAnalysis(session);
+  }
 }
 
 function renderSession() {
@@ -229,7 +275,9 @@ function renderSession() {
     year: "numeric",
   });
 
-  sessionTitleEl.textContent = activeSession.title || "Tabme Tab Group";
+  const displayTitle = activeSession.title || formatGroupTitle(activeSession.tabs);
+  sessionTitleEl.textContent = displayTitle;
+  document.title = `${displayTitle} — Tabme`;
   sessionMetaEl.textContent = `${activeSession.tabs.length} tabs captured on ${dateFormatted} at ${timeFormatted}`;
   tabCountLabel.textContent = `Tabs in this group (${activeSession.tabs.length})`;
 
@@ -309,6 +357,20 @@ function renderSession() {
 function renderSuggestions() {
   if (!activeSession) return;
   suggestionsList.innerHTML = "";
+
+  if (activeSession.status === "analyzing") {
+    const stateEl = document.createElement("div");
+    stateEl.className = "analyzing-state";
+    stateEl.innerHTML = `
+      <div class="analyzing-spinner"></div>
+      <div class="analyzing-content">
+        <span class="analyzing-title">Analyzing captured tabs…</span>
+        <span class="analyzing-desc">Tabme agent is identifying topics and proposing high-confidence actions.</span>
+      </div>
+    `;
+    suggestionsList.appendChild(stateEl);
+    return;
+  }
 
   if (!activeSession.suggestions || activeSession.suggestions.length === 0) {
     const p = document.createElement("p");
@@ -407,7 +469,7 @@ function handleToggleSelectAll() {
 async function handleRestoreAll() {
   if (!activeSession || !activeSession.tabs.length) return;
   for (const tab of activeSession.tabs) {
-    if (tab.url) {
+    if (tab.url && !tab.url.startsWith("chrome-extension://")) {
       await chrome.tabs.create({ url: tab.url, active: false });
     }
   }
@@ -415,19 +477,30 @@ async function handleRestoreAll() {
 
 async function handleGroupInChrome() {
   if (!activeSession || !activeSession.tabs.length) return;
-  const tabIds = activeSession.tabs.map((t) => t.id).filter((id) => typeof id === "number");
-  if (chrome.tabs?.group && tabIds.length > 0) {
-    try {
-      const groupId = await chrome.tabs.group({ tabIds });
+  const urlsToOpen = activeSession.tabs.filter(
+    (t) => t.url && !t.url.startsWith("chrome-extension://")
+  );
+  if (urlsToOpen.length === 0) return;
+
+  try {
+    const createdTabs = [];
+    for (const tab of urlsToOpen) {
+      const created = await chrome.tabs.create({ url: tab.url, active: false });
+      createdTabs.push(created);
+    }
+
+    const newTabIds = createdTabs.map((t) => t.id).filter((id) => typeof id === "number");
+    if (chrome.tabs?.group && newTabIds.length > 0) {
+      const groupId = await chrome.tabs.group({ tabIds: newTabIds });
       if (chrome.tabGroups?.update) {
         await chrome.tabGroups.update(groupId, {
-          title: activeSession.title.slice(0, 20),
-          color: "orange",
+          title: formatGroupTitle(activeSession.tabs),
+          color: "cyan",
         });
       }
-    } catch (e) {
-      console.warn(e);
     }
+  } catch (err) {
+    console.warn("Could not group tabs in Chrome:", err);
   }
 }
 
@@ -446,6 +519,17 @@ async function handleDeleteCurrentSession() {
 async function handleRegenerateSuggestions() {
   if (!activeSession) return;
   regenerateBtn.disabled = true;
+  const originalText = regenerateBtn.textContent;
+  regenerateBtn.textContent = "⟳ Generating…";
+
+  // Reset status to analyzing and clear execution banner
+  activeSession.status = "analyzing";
+  if (executionBanner) {
+    executionBanner.hidden = true;
+    executionBanner.textContent = "";
+  }
+  renderSuggestions();
+
   try {
     const response = await fetch(`${API_BASE}/api/generate-suggestions`, {
       method: "POST",
@@ -457,8 +541,9 @@ async function handleRegenerateSuggestions() {
       activeSession.reviewId = data.reviewId;
       const res = await fetch(`${API_BASE}/api/suggestions/${data.reviewId}`);
       const reviewData = await res.json();
-      if (reviewData.success) {
+      if (reviewData.success && Array.isArray(reviewData.suggestions)) {
         activeSession.suggestions = reviewData.suggestions;
+        activeSession.status = "pending";
         selectedIds = new Set(
           activeSession.suggestions
             .filter((s) => s.status === "pending_review")
@@ -471,8 +556,12 @@ async function handleRegenerateSuggestions() {
     }
   } catch (err) {
     console.error("Re-generate failed:", err);
+    activeSession.status = "pending";
+    renderSuggestions();
   } finally {
     regenerateBtn.disabled = false;
+    regenerateBtn.textContent = originalText;
+    updateSelectedCount();
   }
 }
 
@@ -571,6 +660,8 @@ async function sendAssistantMessage(messageText) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         reviewId: activeSession?.reviewId,
+        tabs: activeSession?.tabs,
+        suggestions: activeSession?.suggestions,
         message: messageText,
       }),
     });
