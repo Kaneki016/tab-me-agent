@@ -40,7 +40,7 @@ export default function ReviewPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [results, setResults] = useState<ExecutionResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const hasFailed = useMemo(
@@ -105,7 +105,7 @@ export default function ReviewPage() {
   async function handleApprove() {
     setExecuting(true);
     setError(null);
-    setResult(null);
+    setResults(null);
     try {
       const response = await fetch("/api/execute-suggestions", {
         method: "POST",
@@ -117,7 +117,7 @@ export default function ReviewPage() {
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Execution failed");
-      setResult(summarizeExecution(data.results ?? []));
+      setResults(data.results ?? []);
       const refresh = await fetch(`/api/suggestions/${reviewId}`);
       const next = await refresh.json();
       if (next.success) {
@@ -290,10 +290,37 @@ export default function ReviewPage() {
               {error}
             </p>
           ) : null}
-          {result ? (
-            <p className="notice" role="status">
-              {result}
-            </p>
+          {results ? (
+            <section className="execution-summary" aria-live="polite">
+              <p className="notice" role="status">
+                {summarizeExecution(results)} Open Ambiguous to see the task list.
+              </p>
+              <ul className="execution-list">
+                {results.map((item) => {
+                  const suggestion = session.suggestions.find(
+                    (candidate) => candidate.id === item.id,
+                  );
+                  return (
+                    <li key={item.id}>
+                      <strong>{suggestion?.title ?? "Tabme task"}</strong>
+                      {item.actionId ? <code>{item.actionId}</code> : null}
+                      {item.resultUrl ? (
+                        <a href={item.resultUrl} target="_blank" rel="noreferrer">
+                          Open this task
+                        </a>
+                      ) : null}
+                      {item.status === "skipped" ? (
+                        <span className="meta">Already present in Ambiguous.</span>
+                      ) : null}
+                      {item.error ? <span className="alert">{item.error}</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+              <a className="btn" href="https://app.ambiguous.ai" target="_blank" rel="noreferrer">
+                Open Ambiguous workspace
+              </a>
+            </section>
           ) : null}
         </section>
 

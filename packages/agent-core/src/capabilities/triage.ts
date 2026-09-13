@@ -60,7 +60,7 @@ const configuredTimeout = Number(process.env.TABME_TRIAGE_TIMEOUT_MS);
 const TRIAGE_TIMEOUT_MS =
   Number.isFinite(configuredTimeout) && configuredTimeout >= 1_000 && configuredTimeout <= 30_000
     ? configuredTimeout
-    : 4_500;
+    : 8000;
 
 function truncateTabs(tabs: TriageTab[]): TriageTab[] {
   return tabs
