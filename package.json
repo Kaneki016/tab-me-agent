@@ -1,0 +1,30 @@
+{
+  "name": "tabme",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tabme — human-in-the-loop tab triage. Built on the CopilotKit Agents Everywhere starter kit.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev:web",
+    "dev:web": "npm run dev --workspace web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "verify": "npm run typecheck && npm test"
+  },
+  "overrides": {
+    "@ag-ui/client": "0.0.59"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.7.0"
+  }
+}
