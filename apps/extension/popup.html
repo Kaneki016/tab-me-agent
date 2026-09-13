@@ -8,9 +8,14 @@
   <body>
     <header>
       <p class="wordmark">Tabme</p>
-      <p class="lede">Capture this window. Approve later.</p>
+      <p class="lede">Human-in-the-loop tab triage.</p>
     </header>
-    <button id="captureBtn" type="button">Capture tabs</button>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <button id="openPanelBtn" type="button">Open Side Panel</button>
+      <button id="captureBtn" type="button" style="background: transparent; color: var(--ink); border: 1px solid var(--ink);">
+        Quick capture
+      </button>
+    </div>
     <p id="status" role="status"></p>
     <script src="popup.js" type="module"></script>
   </body>

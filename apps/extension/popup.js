@@ -2,12 +2,30 @@ import { captureTabs } from "./utils/tabs.js";
 
 const API_BASE = "http://127.0.0.1:3100";
 
+const openPanelBtn = document.getElementById("openPanelBtn");
 const captureBtn = document.getElementById("captureBtn");
 const statusEl = document.getElementById("status");
 
 function setStatus(text, type = "") {
   statusEl.textContent = text;
   statusEl.className = type;
+}
+
+if (openPanelBtn) {
+  openPanelBtn.addEventListener("click", async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.windowId && chrome.sidePanel?.open) {
+        await chrome.sidePanel.open({ windowId: tab.windowId });
+        window.close();
+      } else {
+        setStatus("Side panel not supported in this view.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus("Failed to open side panel.", "error");
+    }
+  });
 }
 
 captureBtn.addEventListener("click", async () => {
