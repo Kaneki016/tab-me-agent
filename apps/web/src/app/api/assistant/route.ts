@@ -23,16 +23,52 @@ export async function POST(request: Request) {
     const suggestions = session?.suggestions ?? [];
 
     // Check if an AI provider API key is configured
-    const apiKey = process.env.OPENAI_API_KEY;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    const openAiKey = process.env.OPENAI_API_KEY;
     let reply = "";
 
-    if (apiKey && apiKey !== "stub-replace-me") {
+    if (openRouterKey && openRouterKey !== "stub-replace-me") {
+      try {
+        const modelName = process.env.MODEL || "openai/gpt-4o-mini";
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openRouterKey}`,
+            "HTTP-Referer": process.env.PUBLIC_APP_URL || "http://127.0.0.1:3100",
+            "X-Title": process.env.APP_TITLE || "Tabme",
+          },
+          body: JSON.stringify({
+            model: modelName,
+            messages: [
+              {
+                role: "system",
+                content: `${SYSTEM_PROMPT}\n\nActive review session context:\nTabs: ${JSON.stringify(
+                  tabs.map((t) => ({ title: t.title, url: t.url, status: t.status })),
+                )}\nSuggestions: ${JSON.stringify(
+                  suggestions.map((s) => ({ id: s.id, title: s.title, type: s.type, status: s.status })),
+                )}`,
+              },
+              { role: "user", content: message },
+            ],
+            temperature: 0.3,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          reply = data.choices?.[0]?.message?.content || "";
+        }
+      } catch (err) {
+        console.warn("OpenRouter call failed, falling back to deterministic advice:", err);
+      }
+    } else if (openAiKey && openAiKey !== "stub-replace-me") {
       try {
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${openAiKey}`,
           },
           body: JSON.stringify({
             model: "gpt-4o-mini",
@@ -56,7 +92,7 @@ export async function POST(request: Request) {
           reply = data.choices?.[0]?.message?.content || "";
         }
       } catch (err) {
-        console.warn("Direct LLM call failed, falling back to deterministic advice:", err);
+        console.warn("Direct OpenAI call failed, falling back to deterministic advice:", err);
       }
     }
 
