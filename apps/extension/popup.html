@@ -8,12 +8,17 @@
   <body>
     <header>
       <p class="wordmark">Tabme</p>
-      <p class="lede">Human-in-the-loop tab triage.</p>
+      <p class="lede">One-click tab triage & workspace actions.</p>
     </header>
     <div style="display: flex; flex-direction: column; gap: 8px;">
-      <button id="openPanelBtn" type="button">Open Side Panel</button>
-      <button id="captureBtn" type="button" style="background: transparent; color: var(--ink); border: 1px solid var(--ink);">
-        Quick capture
+      <button id="groupAndOpenBtn" type="button" class="btn-primary" style="padding: 10px 14px; font-weight: 600;">
+        Group Tabs & Open Tabme
+      </button>
+      <button id="openDashboardBtn" type="button" style="background: transparent; color: var(--ink); border: 1px solid var(--ink);">
+        Open Dashboard
+      </button>
+      <button id="openPanelBtn" type="button" style="background: transparent; color: var(--ink-soft); border: 1px dashed var(--line); font-size: 0.85rem;">
+        Open Side Panel
       </button>
     </div>
     <p id="status" role="status"></p>

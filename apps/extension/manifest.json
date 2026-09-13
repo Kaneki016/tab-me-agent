@@ -8,7 +8,8 @@
     "activeTab",
     "scripting",
     "sidePanel",
-    "tabGroups"
+    "tabGroups",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -20,7 +21,8 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Open Tabme Side Panel"
+    "default_popup": "popup.html",
+    "default_title": "Tabme — One-Click Tab Triage"
   },
   "side_panel": {
     "default_path": "sidepanel.html"

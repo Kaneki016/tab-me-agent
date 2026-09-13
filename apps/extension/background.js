@@ -1,3 +1,10 @@
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error("Tabme: failed to set side panel behavior", error));
+// Tabme Background Service Worker
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "OPEN_DASHBOARD") {
+    const url = chrome.runtime.getURL(`dashboard.html${message.query ? `?${message.query}` : ""}`);
+    chrome.tabs.create({ url });
+    sendResponse({ success: true });
+    return true;
+  }
+});

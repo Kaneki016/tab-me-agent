@@ -29,8 +29,17 @@ const chatLog = document.getElementById("chatLog");
 const chatForm = document.getElementById("chatForm");
 const chatInput = document.getElementById("chatInput");
 const openWebReviewLink = document.getElementById("openWebReviewLink");
+const openDashboardBtn = document.getElementById("openDashboardBtn");
 
 // Event Listeners
+if (openDashboardBtn) {
+  openDashboardBtn.addEventListener("click", () => {
+    const url = chrome.runtime.getURL(
+      "dashboard.html" + (session?.reviewId ? `?reviewId=${session.reviewId}` : "")
+    );
+    chrome.tabs.create({ url });
+  });
+}
 captureBtn.addEventListener("click", () => handleCapture());
 recaptureBtn.addEventListener("click", () => handleCapture());
 
