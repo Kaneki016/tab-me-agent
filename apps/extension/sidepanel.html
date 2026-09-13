@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tabme — Tab Triage</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400;0,500;0,600;1,400&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="wordmark">Tabme</span>
+        <code id="sessionPill" class="session-pill" hidden></code>
+      </div>
+      <div class="top-actions">
+        <button id="openDashboardBtn" class="btn btn-sm" type="button" title="Open full dashboard page">
+          Dashboard ↗
+        </button>
+        <button id="recaptureBtn" class="btn btn-sm" type="button" title="Re-scan open tabs in current window" hidden>
+          Re-scan
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- Empty / Initial State -->
+      <section id="initialState" class="card initial-card">
+        <h1 class="heading">Triage your tabs</h1>
+        <p class="lede">
+          Turn your current browser window into structured actions. Nothing executes without your approval.
+        </p>
+        <button id="captureBtn" class="btn btn-primary btn-block" type="button">
+          Capture tabs in this window
+        </button>
+        <p id="initialStatus" class="meta status-text" role="status"></p>
+      </section>
+
+      <!-- Active Review State -->
+      <section id="reviewState" class="stack" hidden>
+        <!-- Captured Tabs Rail -->
+        <div class="rail-container">
+          <div class="rail-header">
+            <span class="subheading" id="tabCountLabel">Captured tabs</span>
+          </div>
+          <div id="tabRail" class="tab-rail" aria-label="Captured tabs"></div>
+        </div>
+
+        <!-- Suggestions List -->
+        <div class="suggestions-container">
+          <div class="suggestions-header">
+            <span class="subheading">Proposed actions</span>
+            <button id="selectAllBtn" class="link-btn" type="button">Select all</button>
+          </div>
+
+          <div id="suggestionsList" class="suggestions-list" role="group" aria-label="Suggestions"></div>
+
+          <!-- Execution Bar -->
+          <div class="execution-bar">
+            <label class="checkbox-label">
+              <input type="checkbox" id="groupTabsCheckbox" checked />
+              <span>Group approved tabs in Chrome</span>
+            </label>
+
+            <button id="approveBtn" class="btn btn-primary btn-block" type="button">
+              Approve selected (<span id="selectedCount">0</span>)
+            </button>
+
+            <div id="executionResult" class="result-banner" role="status" hidden></div>
+          </div>
+        </div>
+
+        <!-- Assistant Panel -->
+        <section class="assistant-panel" aria-labelledby="assistantHeading">
+          <div class="assistant-header">
+            <h2 id="assistantHeading" class="assistant-title">Ask Tabme</h2>
+            <p class="meta">Can read this review. Cannot write without your approval.</p>
+          </div>
+
+          <div class="quick-prompts">
+            <button class="chip-btn" data-prompt="Using the captured tabs, group them and say which three actions are most useful.">
+              Cluster tabs
+            </button>
+            <button class="chip-btn" data-prompt="Which current suggestions are worth approving, and which should I reject?">
+              What to approve?
+            </button>
+          </div>
+
+          <div id="chatLog" class="chat-log" role="log" aria-live="polite">
+            <div class="chat-bubble chat-assistant">
+              Which tabs should become work? Ask me about this pile of tabs.
+            </div>
+          </div>
+
+          <form id="chatForm" class="chat-form">
+            <input
+              type="text"
+              id="chatInput"
+              class="chat-input"
+              placeholder="Ask about this pile of tabs…"
+              autocomplete="off"
+            />
+            <button type="submit" id="chatSendBtn" class="btn btn-sm">Ask</button>
+          </form>
+        </section>
+
+        <!-- Web Review Link -->
+        <footer class="review-footer">
+          <a id="openWebReviewLink" href="#" target="_blank" class="meta-link">
+            Open full web review page &rarr;
+          </a>
+        </footer>
+      </section>
+    </main>
+
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>

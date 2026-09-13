@@ -1,12 +1,30 @@
 {
   "manifest_version": 3,
   "name": "Tabme",
-  "version": "0.1.0",
-  "description": "Capture open tabs for Tabme review. Nothing runs until you approve it.",
+  "version": "0.2.0",
+  "description": "Human-in-the-loop tab triage. Review and approve proposed actions right in Chrome's side panel.",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "sidePanel",
+    "tabGroups",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:3100/*",
+    "http://localhost:3100/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Tabme"
+    "default_title": "Tabme — One-Click Tab Triage"
   },
-  "permissions": ["tabs", "activeTab", "scripting"],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1:3100/*", "http://localhost:3100/*"]
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
 }
